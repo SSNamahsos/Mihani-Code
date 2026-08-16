@@ -1,187 +1,201 @@
 # Mihani Code
 
-**Your Go Programming Assistant in the Terminal**
+**Your Agentic Terminal Coding Assistant**
 
-*Made by Faz Pad Studio*
+Made by Faz Pad Studio
 
-Mihani Code is a powerful terminal-based coding assistant specialized for **Go development**. It provides AI-powered code explanations, refactoring suggestions, and code generation capabilities, along with offline tools for file operations and codebase analysis.
+## Overview
 
-## ✨ Features
+Mihani Code is an AI-powered coding agent that operates directly in your terminal. Unlike simple chat-based assistants, Mihani Code can actively inspect, modify, and operate on your software projects using a comprehensive set of tools.
 
-### 🤖 AI-Powered Assistance
-- **Interactive Chat/REPL** - Ask coding questions and get instant answers
-- **Code Explanation** - Understand complex Go code with clear explanations
-- **Code Refactoring** - Get suggestions to improve your Go code
-- **Code Generation** - Generate Go code from natural language descriptions
-- **Code Review** - Find issues and improvements in your code
-- **Debug Helper** - Troubleshoot problems with detailed guidance
-- **Test Generation** - Automatically create unit tests for your code
+When you give Mihani Code a task, it will:
+1. Understand your project structure
+2. Read relevant files
+3. Make necessary changes
+4. Run tests or validation commands
+5. Fix any issues discovered
+6. Provide a summary of what was done
 
-### 📁 File Operations
-- Read and view file contents directly in the terminal
-- Create and edit files with multi-line input mode
-- Scan directories to understand codebase structure
-
-### 🧩 Snippet Library
-Built-in Go code templates including:
-- `main` - Basic main function with error handling
-- `http_server` - HTTP server setup with routing
-- `cli_app` - CLI application structure
-- `struct_json` - Struct with JSON tags
-- `interface_repo` - Repository pattern interface
-- `test_function` - Table-driven test template
-- `goroutine_worker` - Worker pool with goroutines
-- `middleware_chain` - HTTP middleware chain
-- `error_handling` - Custom error types
-- `config_loader` - Configuration loading
-- `sql_database` - Database connection setup
-
-### 🔧 Utilities
-- Command history with search functionality
-- Session persistence across restarts
-- Git integration (status, log, diff)
-- Configuration via environment variables or config file
-- Graceful offline mode when no API key is configured
-
-## 🚀 Installation
-
-### From GitHub
-
-```bash
-go install github.com/SSNamahsos/Mihani-Code/cmd/mihanicode@latest
-```
-
-Make sure `$GOPATH/bin` is in your PATH:
-
-```bash
-# Linux/macOS
-export PATH=$PATH:$GOPATH/bin
-
-# Windows PowerShell
-$env:Path += ";$env:GOPATH\bin"
-```
+## Installation
 
 ### From Source
 
 ```bash
 git clone https://github.com/SSNamahsos/Mihani-Code.git
 cd Mihani-Code
-go build -o mihanicode ./cmd/mihanicode
-./mihanicode
+go install ./...
 ```
 
-## ⚙️ Configuration
+### Requirements
+
+- Go 1.19 or later
+- API key for your preferred LLM provider
+
+## Configuration
+
+Mihani Code supports multiple LLM providers through environment variables or a configuration file.
 
 ### Environment Variables
 
-Set your API keys as environment variables:
-
 ```bash
-# OpenAI
-export OPENAI_API_KEY=your_openai_api_key_here
-
-# Anthropic
-export ANTHROPIC_API_KEY=your_anthropic_api_key_here
-
-# Optional: Custom model
-export MIHANI_MODEL=gpt-4o-mini
-export MIHANI_DEFAULT_PROVIDER=openai
+export MIHANI_API_KEY="your-api-key"
+export MIHANI_BASE_URL="https://api.openai.com/v1"  # Optional, for OpenAI-compatible APIs
+export MIHANI_MODEL="gpt-4o"  # Optional
+export MIHANI_PROVIDER="openai-compatible"  # or "anthropic"
 ```
 
 ### Configuration File
 
-Create `~/.mihanirc` or `~/.config/mihanicode/config.json`:
+Create `~/.mihani/.mihanirc`:
 
 ```json
 {
-  "default_provider": "openai",
-  "model": "gpt-4o-mini",
-  "max_history": 1000,
-  "enable_git_integration": true,
-  "auto_save_session": true
+  "provider": "openai-compatible",
+  "base_url": "https://api.openai.com/v1",
+  "api_key": "your-api-key",
+  "model": "gpt-4o",
+  "max_iterations": 50,
+  "command_timeout": 120,
+  "auto_approve": false,
+  "max_tool_calls": 100,
+  "max_file_size": 100000
 }
 ```
 
-## 📖 Usage
+## Usage
 
-Start Mihani Code:
+### Interactive Mode
 
 ```bash
 mihanicode
 ```
 
-### Commands
-
-#### Chat & AI Commands
-- `(message)` - Send a message to the AI assistant
-- `/clear` - Clear conversation history
-- `/explain <file>` - Explain code in a file
-- `/refactor <file> [instruction]` - Refactor code
-- `/generate <prompt>` - Generate Go code from description
-- `/review <file>` - Review code for issues
-- `/debug <problem> <file>` - Debug a specific issue
-- `/test <file>` - Generate tests for code
-
-#### File Operations
-- `/read <file>` - View contents of a file
-- `/write <file>` - Create or overwrite a file
-- `/scan [dir]` - Scan directory for Go files
-
-#### Code Snippets
-- `/snippets [category]` - List available snippets
-- `/snippet <name> [var=value...]` - Insert a snippet
-
-Categories: basic, web, cli, types, patterns, testing, concurrency, utility, database
-
-#### Tools & Utilities
-- `/history [query]` - Show command history
-- `/config` - Show current configuration
-- `/status` - Show session status
-- `/tools` - List all available tools
-- `/git [status|log|diff]` - Git commands
-
-#### Other
-- `/help` - Show help message
-- `/about` - About Mihani Code
-- `/quit`, `/exit` - Exit the application
-
-## 💡 Examples
+Then type your task in natural language:
 
 ```
-/explain main.go
-/refactor handler.go make it more idiomatic
-/generate a function that reads a JSON file
-/review database.go
-/test calculator.go
-/snippet http_server
-/scan ./cmd
-/git status
+> Fix the authentication bug in this project and run the tests
 ```
 
-## 🎨 Branding
-
-Mihani Code features distinctive branding:
-- **"Mihani"** is always displayed in **red** text
-- **"Code"** appears in the default terminal color
-- **"Made by Faz Pad Studio"** attribution in splash screen and about
-
-## 🔒 Offline Mode
-
-When no API key is configured, Mihani Code runs in offline mode with:
-- File operations (`/read`, `/write`)
-- Code scanning (`/scan`)
-- Snippet library
-- Command history
-- Git integration
-
-## 🛠️ Development
+### One-Shot Mode
 
 ```bash
-go build -o mihanicode ./cmd/mihanicode
-go test ./...
-go vet ./...
+mihanicode "Add a dark mode to this application"
+mihanicode "Find and fix the failing tests"
+mihanicode "Review the authentication implementation"
 ```
 
-## 📄 License
+### Available Commands (Interactive Mode)
 
-MIT License - Made by Faz Pad Studio
+- `/help` - Show available commands
+- `/status` - Show current configuration
+- `/exit` or `/quit` - Exit Mihani Code
+
+## Features
+
+### Tools
+
+Mihani Code has access to these tools:
+
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read file contents |
+| `write_file` | Create or overwrite files |
+| `edit_file` | Make targeted edits to files |
+| `delete_file` | Remove files |
+| `list_directory` | List directory contents |
+| `find_files` | Find files by pattern |
+| `search_code` | Search for text in code |
+| `execute_command` | Run shell commands |
+| `git_status` | Check git repository status |
+| `git_diff` | View git diff |
+| `git_log` | View commit history |
+
+### Supported Providers
+
+- **OpenAI** - GPT-4, GPT-4o, GPT-3.5-turbo
+- **OpenAI-Compatible** - Any API following OpenAI's format (self-hosted, etc.)
+- **Anthropic** - Claude 3 models
+
+### Project Detection
+
+Mihani Code automatically detects project types based on:
+- `go.mod` - Go projects
+- `package.json` - Node.js/JavaScript projects
+- `pyproject.toml`, `requirements.txt` - Python projects
+- `Cargo.toml` - Rust projects
+- `pom.xml`, `build.gradle` - Java projects
+- And more...
+
+## Examples
+
+### Fix a Bug
+
+```
+> The login form crashes when submitting with empty fields. Find and fix the issue.
+```
+
+Mihani Code will:
+1. Search for login-related code
+2. Read the relevant files
+3. Identify the crash cause
+4. Apply a fix
+5. Test the fix
+
+### Add a Feature
+
+```
+> Add a REST endpoint for user profiles with GET and PUT methods
+```
+
+Mihani Code will:
+1. Explore the existing API structure
+2. Create or modify route handlers
+3. Add necessary models/types
+4. Update documentation if present
+
+### Refactor Code
+
+```
+> Refactor the database connection handling to use a connection pool
+```
+
+### Run Tests and Fix Failures
+
+```
+> Run all tests and fix any that fail
+```
+
+## Architecture
+
+```
+cmd/mihanicode/       - CLI entry point
+internal/
+  agent/              - Agent orchestration loop
+  tools/              - Tool registry and implementations
+  llm/                - LLM interfaces and types
+  providers/          - LLM provider implementations
+  filesystem/         - File operations
+  shell/              - Command execution
+  git/                - Git operations
+  config/             - Configuration management
+```
+
+## Safety
+
+Mihani Code includes safety features:
+- Configurable command timeouts
+- Maximum iteration limits to prevent infinite loops
+- File size limits to prevent reading huge files
+- Auto-approve mode can be disabled for sensitive operations
+
+## License
+
+See LICENSE file for details.
+
+## Support
+
+For issues and feature requests, please open an issue on GitHub.
+
+---
+
+Made by Faz Pad Studio

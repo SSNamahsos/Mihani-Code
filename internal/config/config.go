@@ -5,111 +5,100 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 )
 
-// Config holds the application configuration.
+// Config represents the Mihani Code configuration
 type Config struct {
-	DefaultProvider    string `json:"default_provider"`
-	Model              string `json:"model"`
-	OpenAIAPIKey       string `json:"openai_api_key,omitempty"`
-	AnthropicAPIKey    string `json:"anthropic_api_key,omitempty"`
-	MaxHistory         int    `json:"max_history"`
-	EnableGitIntegration bool `json:"enable_git_integration"`
-	AutoSaveSession    bool   `json:"auto_save_session"`
-	Theme              string `json:"theme"`
-	ShowLineNumbers    bool   `json:"show_line_numbers"`
-	TabWidth           int    `json:"tab_width"`
+	Provider        string `json:"provider,omitempty"`
+	BaseURL         string `json:"base_url,omitempty"`
+	APIKey          string `json:"api_key,omitempty"`
+	Model           string `json:"model,omitempty"`
+	MaxIterations   int    `json:"max_iterations,omitempty"`
+	CommandTimeout  int    `json:"command_timeout,omitempty"`
+	AutoApprove     bool   `json:"auto_approve,omitempty"`
+	MaxToolCalls    int    `json:"max_tool_calls,omitempty"`
+	MaxOutputSize   int    `json:"max_output_size,omitempty"`
+	MaxFileSize     int    `json:"max_file_size,omitempty"`
 }
 
-// DefaultConfig returns the default configuration.
+// DefaultConfig returns a configuration with default values
 func DefaultConfig() *Config {
 	return &Config{
-		DefaultProvider:    "openai",
-		Model:              "gpt-4o-mini",
-		MaxHistory:         1000,
-		EnableGitIntegration: true,
-		AutoSaveSession:    true,
-		Theme:              "default",
-		ShowLineNumbers:    true,
-		TabWidth:           4,
+		Provider:       "openai-compatible",
+		BaseURL:        "",
+		Model:          "gpt-4o",
+		MaxIterations:  50,
+		CommandTimeout: 120,
+		AutoApprove:    false,
+		MaxToolCalls:   100,
+		MaxOutputSize:  50000,
+		MaxFileSize:    100000,
 	}
 }
 
-// GetConfigPath returns the path to the config file.
-func GetConfigPath() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		homeDir = "."
-	}
-
-	// Check for .mihanirc in home directory first
-	mianiRc := filepath.Join(homeDir, ".mihanirc")
-	if _, err := os.Stat(mianiRc); err == nil {
-		return mianiRc
-	}
-
-	// Use standard config directory
-	var configDir string
-	switch runtime.GOOS {
-	case "windows":
-		configDir = filepath.Join(os.Getenv("APPDATA"), "mihanicode")
-	case "darwin":
-		configDir = filepath.Join(homeDir, "Library", "Application Support", "mihanicode")
-	default:
-		configDir = filepath.Join(homeDir, ".config", "mihanicode")
-	}
-
-	return filepath.Join(configDir, "config.json")
-}
-
-// LoadConfig loads configuration from file and environment.
-func LoadConfig() (*Config, error) {
+// Load loads configuration from file and environment variables
+func Load() (*Config, error) {
 	cfg := DefaultConfig()
-	configPath := GetConfigPath()
 
-	// Try to load from file
-	data, err := os.ReadFile(configPath)
+	// Try to load from config file
+	configFile, err := getConfigPath()
 	if err == nil {
-		if err := json.Unmarshal(data, cfg); err != nil {
-			return nil, fmt.Errorf("failed to parse config file: %w", err)
+		if data, err := os.ReadFile(configFile); err == nil {
+			if err := json.Unmarshal(data, cfg); err != nil {
+				return nil, fmt.Errorf("failed to parse config file: %w", err)
+			}
 		}
 	}
 
-	// Override with environment variables
-	if key := os.Getenv("MIHANI_DEFAULT_PROVIDER"); key != "" {
-		cfg.DefaultProvider = key
+	// Environment variables override config file
+	if env := os.Getenv("MIHANI_API_KEY"); env != "" {
+		cfg.APIKey = env
 	}
-	if model := os.Getenv("MIHANI_MODEL"); model != "" {
-		cfg.Model = model
+	if env := os.Getenv("MIHANI_BASE_URL"); env != "" {
+		cfg.BaseURL = env
 	}
-	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
-		cfg.OpenAIAPIKey = key
+	if env := os.Getenv("MIHANI_MODEL"); env != "" {
+		cfg.Model = env
 	}
-	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
-		cfg.AnthropicAPIKey = key
+	if env := os.Getenv("MIHANI_PROVIDER"); env != "" {
+		cfg.Provider = env
 	}
 
 	return cfg, nil
 }
 
-// SaveConfig saves the configuration to file.
-func SaveConfig(cfg *Config) error {
-	configPath := GetConfigPath()
-	configDir := filepath.Dir(configPath)
+// Save saves the configuration to file
+func (c *Config) Save() error {
+	configDir, err := getConfigDir()
+	if err != nil {
+		return err
+	}
 
 	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
+		return err
 	}
 
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	configFile := filepath.Join(configDir, ".mihanirc")
+	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
+		return err
 	}
 
-	if err := os.WriteFile(configPath, data, 0600); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
-	}
+	return os.WriteFile(configFile, data, 0600)
+}
 
-	return nil
+func getConfigDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(homeDir, ".mihani"), nil
+}
+
+func getConfigPath() (string, error) {
+	configDir, err := getConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, ".mihanirc"), nil
 }
