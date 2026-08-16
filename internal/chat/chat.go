@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fazpadstudio/mihanicode/internal/llm"
+	"github.com/SSNamahsos/Mihani-Code/internal/llm"
 )
 
 // Session represents an interactive chat session.

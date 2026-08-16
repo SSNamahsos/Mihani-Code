@@ -31,7 +31,7 @@ Made by Faz Pad Studio
 ### Using `go install` (Recommended)
 
 ```bash
-go install github.com/fazpadstudio/mihanicode/cmd/mihanicode@latest
+go install github.com/SSNamahsos/Mihani-Code/cmd/mihanicode@latest
 ```
 
 The binary will be installed to `$GOPATH/bin/mihanicode`.
@@ -39,8 +39,8 @@ The binary will be installed to `$GOPATH/bin/mihanicode`.
 ### Building from Source
 
 ```bash
-git clone https://github.com/fazpadstudio/mihanicode.git
-cd mihanicode
+git clone https://github.com/SSNamahsos/Mihani-Code.git
+cd Mihani-Code
 go build -o mihanicode ./cmd/mihanicode
 ```
 
