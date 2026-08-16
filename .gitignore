@@ -3,54 +3,62 @@
 *.o
 *.a
 *.so
-*.dylib
-*.dll
 *.exe
+*.dll
 *.out
+*.obj
 
-# Go cache and build directories
-go.sum
-go.mod
+# Go cache and tools
+go/pkg/mod/
+go/build/
 *.mod
 *.sum
-vendor/
 
 # Dependencies
-node_modules/
-venv/
-.venv/
-__pycache__/
-*.egg-info/
-.Python
+vendor/
 
-# Logs and temporary files
+# Logs and temp files
 *.log
 *.tmp
-*.temp
-*.bak
-*.swp
 
-# Environment variables
+# Environment
 .env
 .env.local
 *.env.*
 
-# Editors and IDEs
+# Editors
 .vscode/
 .idea/
 *.swp
 *.swo
-tags
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# Build directories
+build/
+dist/
+target/
+
+# Python (if mixed project)
+__pycache__/
 *.pyc
 *.pyo
 *.pyd
-__pycache__/
-*.class
-*.jar
-*.war
-*.ear
-target/
-.gradle/
-build/
-dist/
+.pytest_cache/
+.mypy_cache/
+
+# Node (if mixed project)
+node_modules/
+
+# Virtual environments
+.venv/
+venv/
+.env/
+
+# System files
+.DS_Store
+Thumbs.db
 ```
