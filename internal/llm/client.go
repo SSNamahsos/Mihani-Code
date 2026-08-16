@@ -1,4 +1,3 @@
-// Package llm provides LLM API client implementations.
 package llm
 
 import (
@@ -10,17 +9,22 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 )
 
-// Provider represents an LLM provider type.
+// Provider represents an LLM provider.
 type Provider string
 
 const (
-	ProviderOpenAI    Provider = "openai"
-	ProviderAnthropic Provider = "anthropic"
-	ProviderNone      Provider = "none"
+	ProviderNone       Provider = "none"
+	ProviderOpenAI     Provider = "openai"
+	ProviderAnthropic  Provider = "anthropic"
 )
+
+// Client defines the interface for LLM clients.
+type Client interface {
+	Chat(ctx context.Context, messages []Message) (string, error)
+	ChatStream(ctx context.Context, messages []Message, callback func(string)) (string, error)
+}
 
 // Message represents a chat message.
 type Message struct {
@@ -28,50 +32,97 @@ type Message struct {
 	Content string `json:"content"`
 }
 
-// Client is the interface for LLM providers.
-type Client interface {
-	Chat(ctx context.Context, messages []Message) (string, error)
-	CodeExplain(ctx context.Context, code string) (string, error)
-	CodeRefactor(ctx context.Context, code string, instruction string) (string, error)
-	CodeGenerate(ctx context.Context, prompt string) (string, error)
-}
-
-// OpenAIClient implements the Client interface for OpenAI.
+// OpenAIClient is an OpenAI API client.
 type OpenAIClient struct {
 	apiKey string
 	model  string
 	client *http.Client
 }
 
-// NewOpenAIClient creates a new OpenAI client.
-func NewOpenAIClient(apiKey, model string) *OpenAIClient {
-	return &OpenAIClient{
-		apiKey: apiKey,
-		model:  model,
-		client: &http.Client{Timeout: 120 * time.Second},
+// AnthropicClient is an Anthropic API client.
+type AnthropicClient struct {
+	apiKey string
+	model  string
+	client *http.Client
+}
+
+// StandaloneClient is a fallback client for offline mode.
+type StandaloneClient struct{}
+
+// NewClient creates a new LLM client based on the provider.
+func NewClient(provider Provider, apiKey, model string) (Client, error) {
+	if apiKey == "" {
+		switch provider {
+		case ProviderOpenAI:
+			apiKey = os.Getenv("OPENAI_API_KEY")
+		case ProviderAnthropic:
+			apiKey = os.Getenv("ANTHROPIC_API_KEY")
+		}
+	}
+
+	if apiKey == "" {
+		return nil, fmt.Errorf("no API key available for provider %s", provider)
+	}
+
+	switch provider {
+	case ProviderOpenAI:
+		return NewOpenAIClient(apiKey, model), nil
+	case ProviderAnthropic:
+		return NewAnthropicClient(apiKey, model), nil
+	default:
+		return nil, fmt.Errorf("unknown provider: %s", provider)
 	}
 }
 
-// Chat sends messages to OpenAI and returns the response.
+// NewOpenAIClient creates a new OpenAI client.
+func NewOpenAIClient(apiKey, model string) *OpenAIClient {
+	if model == "" {
+		model = "gpt-4o-mini"
+	}
+	return &OpenAIClient{
+		apiKey: apiKey,
+		model:  model,
+		client: &http.Client{},
+	}
+}
+
+// NewAnthropicClient creates a new Anthropic client.
+func NewAnthropicClient(apiKey, model string) *AnthropicClient {
+	if model == "" {
+		model = "claude-sonnet-4-20250514"
+	}
+	return &AnthropicClient{
+		apiKey: apiKey,
+		model:  model,
+		client: &http.Client{},
+	}
+}
+
+// NewStandaloneClient creates a standalone client for offline mode.
+func NewStandaloneClient() *StandaloneClient {
+	return &StandaloneClient{}
+}
+
+// Chat sends a chat request to OpenAI.
 func (c *OpenAIClient) Chat(ctx context.Context, messages []Message) (string, error) {
+	return c.ChatStream(ctx, messages, nil)
+}
+
+// ChatStream sends a streaming chat request to OpenAI.
+func (c *OpenAIClient) ChatStream(ctx context.Context, messages []Message, callback func(string)) (string, error) {
+	url := "https://api.openai.com/v1/chat/completions"
+
 	reqBody := map[string]interface{}{
-		"model": c.model,
-		"messages": func() []map[string]string {
-			result := make([]map[string]string, len(messages))
-			for i, m := range messages {
-				result[i] = map[string]string{"role": m.Role, "content": m.Content}
-			}
-			return result
-		}(),
-		"max_tokens": 4096,
+		"model":    c.model,
+		"messages": messages,
 	}
 
-	body, err := json.Marshal(reqBody)
+	data, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(data))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
@@ -85,13 +136,9 @@ func (c *OpenAIClient) Chat(ctx context.Context, messages []Message) (string, er
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
-	}
-
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("API error: %s (status: %d)", string(body), resp.StatusCode)
 	}
 
 	var result struct {
@@ -102,93 +149,62 @@ func (c *OpenAIClient) Chat(ctx context.Context, messages []Message) (string, er
 		} `json:"choices"`
 	}
 
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	if len(result.Choices) == 0 {
 		return "", fmt.Errorf("no response from API")
 	}
 
-	return strings.TrimSpace(result.Choices[0].Message.Content), nil
-}
-
-// CodeExplain explains Go code.
-func (c *OpenAIClient) CodeExplain(ctx context.Context, code string) (string, error) {
-	messages := []Message{
-		{Role: "system", Content: "You are a Go programming expert. Explain the provided Go code clearly and concisely."},
-		{Role: "user", Content: "Explain this Go code:\n\n```go\n" + code + "\n```"},
+	content := result.Choices[0].Message.Content
+	if callback != nil {
+		callback(content)
 	}
-	return c.Chat(ctx, messages)
+
+	return content, nil
 }
 
-// CodeRefactor refactors Go code based on instructions.
-func (c *OpenAIClient) CodeRefactor(ctx context.Context, code string, instruction string) (string, error) {
-	messages := []Message{
-		{Role: "system", Content: "You are a Go programming expert. Refactor code according to user instructions while maintaining functionality."},
-		{Role: "user", Content: fmt.Sprintf("Refactor this Go code: %s\n\nInstruction: %s\n\nProvide only the refactored code in a go code block.", code, instruction)},
-	}
-	return c.Chat(ctx, messages)
-}
-
-// CodeGenerate generates Go code from a prompt.
-func (c *OpenAIClient) CodeGenerate(ctx context.Context, prompt string) (string, error) {
-	messages := []Message{
-		{Role: "system", Content: "You are a Go programming expert. Generate clean, idiomatic Go code based on user requirements."},
-		{Role: "user", Content: "Generate Go code for: " + prompt},
-	}
-	return c.Chat(ctx, messages)
-}
-
-// AnthropicClient implements the Client interface for Anthropic.
-type AnthropicClient struct {
-	apiKey string
-	model  string
-	client *http.Client
-}
-
-// NewAnthropicClient creates a new Anthropic client.
-func NewAnthropicClient(apiKey, model string) *AnthropicClient {
-	return &AnthropicClient{
-		apiKey: apiKey,
-		model:  model,
-		client: &http.Client{Timeout: 120 * time.Second},
-	}
-}
-
-// Chat sends messages to Anthropic and returns the response.
+// Chat sends a chat request to Anthropic.
 func (c *AnthropicClient) Chat(ctx context.Context, messages []Message) (string, error) {
+	return c.ChatStream(ctx, messages, nil)
+}
+
+// ChatStream sends a streaming chat request to Anthropic.
+func (c *AnthropicClient) ChatStream(ctx context.Context, messages []Message, callback func(string)) (string, error) {
+	url := "https://api.anthropic.com/v1/messages"
+
 	// Convert messages to Anthropic format
 	var systemPrompt string
 	var anthropicMessages []map[string]interface{}
 
-	for _, m := range messages {
-		if m.Role == "system" {
-			systemPrompt = m.Content
+	for _, msg := range messages {
+		if msg.Role == "system" {
+			systemPrompt = msg.Content
 		} else {
 			anthropicMessages = append(anthropicMessages, map[string]interface{}{
-				"role":    m.Role,
-				"content": m.Content,
+				"role":    msg.Role,
+				"content": msg.Content,
 			})
 		}
 	}
 
 	reqBody := map[string]interface{}{
-		"model":       c.model,
-		"max_tokens":  4096,
-		"messages":    anthropicMessages,
+		"model":         c.model,
+		"max_tokens":    4096,
+		"messages":      anthropicMessages,
 	}
-	
+
 	if systemPrompt != "" {
 		reqBody["system"] = systemPrompt
 	}
 
-	body, err := json.Marshal(reqBody)
+	data, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(data))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
@@ -203,13 +219,9 @@ func (c *AnthropicClient) Chat(ctx context.Context, messages []Message) (string,
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
-	}
-
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBody))
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("API error: %s (status: %d)", string(body), resp.StatusCode)
 	}
 
 	var result struct {
@@ -218,103 +230,97 @@ func (c *AnthropicClient) Chat(ctx context.Context, messages []Message) (string,
 		} `json:"content"`
 	}
 
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	if len(result.Content) == 0 {
 		return "", fmt.Errorf("no response from API")
 	}
 
-	return strings.TrimSpace(result.Content[0].Text), nil
+	content := result.Content[0].Text
+	if callback != nil {
+		callback(content)
+	}
+
+	return content, nil
 }
 
-// CodeExplain explains Go code.
-func (c *AnthropicClient) CodeExplain(ctx context.Context, code string) (string, error) {
-	messages := []Message{
-		{Role: "system", Content: "You are a Go programming expert. Explain the provided Go code clearly and concisely."},
-		{Role: "user", Content: "Explain this Go code:\n\n```go\n" + code + "\n```"},
-	}
-	return c.Chat(ctx, messages)
-}
-
-// CodeRefactor refactors Go code based on instructions.
-func (c *AnthropicClient) CodeRefactor(ctx context.Context, code string, instruction string) (string, error) {
-	messages := []Message{
-		{Role: "system", Content: "You are a Go programming expert. Refactor code according to user instructions while maintaining functionality."},
-		{Role: "user", Content: fmt.Sprintf("Refactor this Go code: %s\n\nInstruction: %s\n\nProvide only the refactored code in a go code block.", code, instruction)},
-	}
-	return c.Chat(ctx, messages)
-}
-
-// CodeGenerate generates Go code from a prompt.
-func (c *AnthropicClient) CodeGenerate(ctx context.Context, prompt string) (string, error) {
-	messages := []Message{
-		{Role: "system", Content: "You are a Go programming expert. Generate clean, idiomatic Go code based on user requirements."},
-		{Role: "user", Content: "Generate Go code for: " + prompt},
-	}
-	return c.Chat(ctx, messages)
-}
-
-// NewClient creates an appropriate LLM client based on configuration.
-func NewClient(provider Provider, apiKey, model string) (Client, error) {
-	// Check environment variables if apiKey not provided
-	if apiKey == "" {
-		switch provider {
-		case ProviderOpenAI:
-			apiKey = os.Getenv("OPENAI_API_KEY")
-		case ProviderAnthropic:
-			apiKey = os.Getenv("ANTHROPIC_API_KEY")
-		}
-	}
-
-	if apiKey == "" {
-		return nil, fmt.Errorf("no API key provided for provider %s", provider)
-	}
-
-	if model == "" {
-		switch provider {
-		case ProviderOpenAI:
-			model = "gpt-4o-mini"
-		case ProviderAnthropic:
-			model = "claude-sonnet-4-5-20250929"
-		}
-	}
-
-	switch provider {
-	case ProviderOpenAI:
-		return NewOpenAIClient(apiKey, model), nil
-	case ProviderAnthropic:
-		return NewAnthropicClient(apiKey, model), nil
-	default:
-		return nil, fmt.Errorf("unknown provider: %s", provider)
-	}
-}
-
-// StandaloneClient provides offline capabilities.
-type StandaloneClient struct{}
-
-// NewStandaloneClient creates a standalone client for offline use.
-func NewStandaloneClient() *StandaloneClient {
-	return &StandaloneClient{}
-}
-
-// Chat provides canned responses for offline mode.
+// Chat handles chat in standalone/offline mode.
 func (c *StandaloneClient) Chat(ctx context.Context, messages []Message) (string, error) {
-	return "[Offline Mode] Mihani Code is running in standalone mode. Configure an API key to enable full AI assistance.\n\nAvailable offline features:\n- File viewing and editing\n- Code scanning\n- Snippet templates\n- Git integration\n\nUse /help to see all commands.", nil
+	return c.ChatStream(ctx, messages, nil)
 }
 
-// CodeExplain provides basic static analysis hints.
-func (c *StandaloneClient) CodeExplain(ctx context.Context, code string) (string, error) {
-	return "[Offline Mode] AI explanation unavailable. The code appears to be Go source code. Configure an API key for detailed explanations.", nil
+// ChatStream handles streaming chat in standalone/offline mode.
+func (c *StandaloneClient) ChatStream(ctx context.Context, messages []Message, callback func(string)) (string, error) {
+	// Provide helpful offline responses
+	lastMsg := ""
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			lastMsg = messages[i].Content
+			break
+		}
+	}
+
+	response := `[OFFLINE MODE]
+
+Mihani Code is running in offline mode. To enable full AI features:
+
+1. Set your API key via environment variable:
+   - export OPENAI_API_KEY=your_key_here
+   - export ANTHROPIC_API_KEY=your_key_here
+
+2. Or configure in ~/.mihanirc or config file:
+   {
+     "default_provider": "openai",
+     "openai_api_key": "your_key_here"
+   }
+
+Offline capabilities available:
+- /read, /write - File operations
+- /scan - Codebase scanning
+- /snippets - Code templates
+- /history - Command history
+
+Your query: "` + lastMsg + `"
+
+Please configure an API key for AI-powered assistance.`
+
+	if callback != nil {
+		callback(response)
+	}
+
+	return response, nil
 }
 
-// CodeRefactor provides basic suggestions.
-func (c *StandaloneClient) CodeRefactor(ctx context.Context, code string, instruction string) (string, error) {
-	return "[Offline Mode] AI refactoring unavailable. Configure an API key for intelligent code refactoring.", nil
+// IsOnline checks if the client can connect to the API.
+func IsOnline(client Client) bool {
+	_, ok := client.(*StandaloneClient)
+	return !ok
 }
 
-// CodeGenerate provides template-based generation.
-func (c *StandaloneClient) CodeGenerate(ctx context.Context, prompt string) (string, error) {
-	return "[Offline Mode] AI generation unavailable. Configure an API key for intelligent code generation.\n\nSee /snippets command for available templates.", nil
+// GetProviderName returns the provider name from a client.
+func GetProviderName(client Client) string {
+	switch client.(type) {
+	case *OpenAIClient:
+		return "openai"
+	case *AnthropicClient:
+		return "anthropic"
+	case *StandaloneClient:
+		return "offline"
+	default:
+		return "unknown"
+	}
+}
+
+// SanitizeInput removes potentially problematic characters from user input.
+func SanitizeInput(input string) string {
+	// Remove null bytes and other control characters
+	input = strings.Map(func(r rune) rune {
+		if r < 32 && r != '\n' && r != '\t' {
+			return -1
+		}
+		return r
+	}, input)
+	return strings.TrimSpace(input)
 }

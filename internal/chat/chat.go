@@ -1,4 +1,3 @@
-// Package chat provides the interactive chat/REPL functionality.
 package chat
 
 import (
@@ -10,185 +9,225 @@ import (
 	"github.com/SSNamahsos/Mihani-Code/internal/llm"
 )
 
-// Session represents an interactive chat session.
+// Session represents a chat session with conversation history.
 type Session struct {
-	Messages   []llm.Message
-	LLMClient  llm.Client
-	SystemPrompt string
+	client    llm.Client
+	messages  []llm.Message
+	systemMsg string
+	createdAt time.Time
+	updatedAt time.Time
 }
 
 // NewSession creates a new chat session.
 func NewSession(client llm.Client) *Session {
 	return &Session{
-		Messages:  make([]llm.Message, 0),
-		LLMClient: client,
-		SystemPrompt: `You are Mihani Code, a specialized Go programming assistant created by Faz Pad Studio.
-You help developers with Go code including:
-- Writing clean, idiomatic Go code
-- Explaining Go concepts and patterns
-- Refactoring and optimizing Go code
-- Debugging Go applications
-- Best practices for Go development
-- Testing in Go
-- Concurrency patterns in Go
-
-Always provide clear, concise answers with working Go code examples when relevant.
-Format code in markdown code blocks with the "go" language identifier.`,
+		client:    client,
+		messages:  make([]llm.Message, 0),
+		systemMsg: "You are Mihani Code, an expert Go programming assistant created by Faz Pad Studio. You specialize in Go development, providing code examples, explanations, refactoring advice, and best practices. Always write idiomatic Go code following effective Go principles. When showing code, use proper Go formatting. Be concise but thorough.",
+		createdAt: time.Now(),
+		updatedAt: time.Now(),
 	}
 }
 
-// AddMessage adds a message to the conversation history.
-func (s *Session) AddMessage(role, content string) {
-	s.Messages = append(s.Messages, llm.Message{
-		Role:    role,
-		Content: content,
-	})
-}
-
-// Clear clears the conversation history.
-func (s *Session) Clear() {
-	s.Messages = make([]llm.Message, 0)
-}
-
-// GetContext returns the current conversation context.
-func (s *Session) GetContext() []llm.Message {
-	// Include system prompt as first message
-	messages := make([]llm.Message, 0, len(s.Messages)+1)
-	messages = append(messages, llm.Message{
-		Role:    "system",
-		Content: s.SystemPrompt,
-	})
-	messages = append(messages, s.Messages...)
-	return messages
-}
-
-// Chat sends a message and gets a response from the LLM.
+// Chat sends a message and gets a response.
 func (s *Session) Chat(ctx context.Context, userMessage string) (string, error) {
-	// Add user message to history
-	s.AddMessage("user", userMessage)
+	userMessage = llm.SanitizeInput(userMessage)
+	
+	// Build messages array with system prompt
+	messages := make([]llm.Message, 0, len(s.messages)+2)
+	
+	if s.systemMsg != "" {
+		messages = append(messages, llm.Message{
+			Role:    "system",
+			Content: s.systemMsg,
+		})
+	}
+	
+	messages = append(messages, s.messages...)
+	messages = append(messages, llm.Message{
+		Role:    "user",
+		Content: userMessage,
+	})
 
-	// Get full context
-	messages := s.GetContext()
-
-	// Send to LLM
-	response, err := s.LLMClient.Chat(ctx, messages)
+	response, err := s.client.ChatStream(ctx, messages, nil)
 	if err != nil {
-		return "", fmt.Errorf("chat failed: %w", err)
+		return "", err
 	}
 
-	// Add assistant response to history
-	s.AddMessage("assistant", response)
+	// Add to conversation history
+	s.messages = append(s.messages, llm.Message{
+		Role:    "user",
+		Content: userMessage,
+	})
+	s.messages = append(s.messages, llm.Message{
+		Role:    "assistant",
+		Content: response,
+	})
+	
+	s.updatedAt = time.Now()
 
 	return response, nil
 }
 
-// ExplainCode explains the provided Go code.
-func (s *Session) ExplainCode(ctx context.Context, code string) (string, error) {
-	return s.LLMClient.CodeExplain(ctx, code)
+// ChatWithSystem sends a message with a custom system prompt.
+func (s *Session) ChatWithSystem(ctx context.Context, systemPrompt, userMessage string) (string, error) {
+	originalSystem := s.systemMsg
+	s.systemMsg = systemPrompt
+	defer func() { s.systemMsg = originalSystem }()
+	
+	return s.Chat(ctx, userMessage)
 }
 
-// RefactorCode refactors Go code based on instructions.
+// ExplainCode explains code in the given content.
+func (s *Session) ExplainCode(ctx context.Context, code string) (string, error) {
+	prompt := fmt.Sprintf(`Please explain this Go code clearly and concisely:
+
+%s
+
+Provide:
+1. A brief overview of what the code does
+2. Key components and their purposes
+3. Any notable Go patterns or best practices used
+4. Potential improvements if applicable`, code)
+
+	return s.Chat(ctx, prompt)
+}
+
+// RefactorCode suggests refactoring for the given code.
 func (s *Session) RefactorCode(ctx context.Context, code, instruction string) (string, error) {
-	return s.LLMClient.CodeRefactor(ctx, code, instruction)
+	prompt := fmt.Sprintf(`Please refactor this Go code with the following instruction: %s
+
+Original code:
+%s
+
+Provide:
+1. The refactored code in a Go code block
+2. A brief explanation of the changes made
+3. Why these changes improve the code
+
+Focus on:
+- Idiomatic Go patterns
+- Readability and maintainability
+- Performance improvements if applicable
+- Error handling best practices`, instruction, code)
+
+	return s.Chat(ctx, prompt)
 }
 
 // GenerateCode generates Go code from a description.
-func (s *Session) GenerateCode(ctx context.Context, prompt string) (string, error) {
-	return s.LLMClient.CodeGenerate(ctx, prompt)
+func (s *Session) GenerateCode(ctx context.Context, description string) (string, error) {
+	prompt := fmt.Sprintf(`Generate Go code based on this description: %s
+
+Requirements:
+- Write idiomatic, production-ready Go code
+- Include proper error handling
+- Add comments for complex logic
+- Follow Go naming conventions
+- Include example usage if helpful
+
+Provide the complete, working code in a Go code block.`, description)
+
+	return s.Chat(ctx, prompt)
 }
 
-// WithSystemPrompt sets a custom system prompt.
-func (s *Session) WithSystemPrompt(prompt string) *Session {
-	s.SystemPrompt = prompt
-	return s
+// ReviewCode provides a code review for the given code.
+func (s *Session) ReviewCode(ctx context.Context, code string) (string, error) {
+	prompt := fmt.Sprintf(`Please review this Go code and provide constructive feedback:
+
+%s
+
+Review aspects:
+1. Code correctness and potential bugs
+2. Adherence to Go best practices and idioms
+3. Error handling completeness
+4. Performance considerations
+5. Readability and maintainability
+6. Security concerns if any
+7. Suggestions for improvement
+
+Be specific and provide code examples for suggested changes.`, code)
+
+	return s.Chat(ctx, prompt)
 }
 
-// TrimHistory trims the conversation history to prevent token limits.
-func (s *Session) TrimHistory(maxMessages int) {
-	if len(s.Messages) <= maxMessages {
+// DebugHelp helps debug an issue.
+func (s *Session) DebugHelp(ctx context.Context, problem, code string) (string, error) {
+	prompt := fmt.Sprintf(`Help me debug this Go code issue:
+
+Problem description:
+%s
+
+Related code:
+%s
+
+Please:
+1. Identify the likely cause of the issue
+2. Explain why it's happening
+3. Provide a fix with corrected code
+4. Suggest how to prevent similar issues in the future`, problem, code)
+
+	return s.Chat(ctx, prompt)
+}
+
+// TestGeneration generates tests for the given code.
+func (s *Session) GenerateTests(ctx context.Context, code string) (string, error) {
+	prompt := fmt.Sprintf(`Generate comprehensive unit tests for this Go code:
+
+%s
+
+Requirements:
+- Use Go's testing package
+- Cover normal cases, edge cases, and error conditions
+- Follow Go testing conventions
+- Include table-driven tests where appropriate
+- Add clear test names that describe what's being tested
+- Ensure tests are deterministic and don't have side effects
+
+Provide the complete test file content.`, code)
+
+	return s.Chat(ctx, prompt)
+}
+
+// Clear resets the conversation history.
+func (s *Session) Clear() {
+	s.messages = make([]llm.Message, 0)
+	s.updatedAt = time.Now()
+}
+
+// GetHistory returns the conversation history.
+func (s *Session) GetHistory() []llm.Message {
+	return s.messages
+}
+
+// GetMessagesCount returns the number of messages in history.
+func (s *Session) GetMessagesCount() int {
+	return len(s.messages)
+}
+
+// SetMaxHistory limits the conversation history to n messages.
+func (s *Session) SetMaxHistory(n int) {
+	if n <= 0 {
 		return
 	}
-	// Keep the most recent messages
-	s.Messages = s.Messages[len(s.Messages)-maxMessages:]
-}
-
-// GetStats returns session statistics.
-func (s *Session) GetStats() SessionStats {
-	userMsgs := 0
-	assistantMsgs := 0
-	totalChars := 0
-
-	for _, m := range s.Messages {
-		totalChars += len(m.Content)
-		switch m.Role {
-		case "user":
-			userMsgs++
-		case "assistant":
-			assistantMsgs++
-		}
-	}
-
-	return SessionStats{
-		UserMessages:      userMsgs,
-		AssistantMessages: assistantMsgs,
-		TotalCharacters:   totalChars,
-		MessageCount:      len(s.Messages),
-	}
-}
-
-// SessionStats contains statistics about a chat session.
-type SessionStats struct {
-	UserMessages      int
-	AssistantMessages int
-	TotalCharacters   int
-	MessageCount      int
-}
-
-// SimpleChat performs a one-off chat without maintaining history.
-func SimpleChat(ctx context.Context, client llm.Client, systemPrompt, userMessage string) (string, error) {
-	messages := []llm.Message{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: userMessage},
-	}
-	return client.Chat(ctx, messages)
-}
-
-// ChatWithTimeout performs a chat operation with a timeout.
-func ChatWithTimeout(ctx context.Context, client llm.Client, messages []llm.Message, timeout time.Duration) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	return client.Chat(ctx, messages)
-}
-
-// ExtractCodeBlocks extracts Go code blocks from a response.
-func ExtractCodeBlocks(response string) []string {
-	var blocks []string
 	
-	lines := strings.Split(response, "\n")
-	var currentBlock strings.Builder
-	inBlock := false
-	blockLang := ""
-
-	for _, line := range lines {
-		if strings.HasPrefix(line, "```") {
-			if !inBlock {
-				// Starting a code block
-				inBlock = true
-				blockLang = strings.TrimPrefix(line, "```")
-				currentBlock.Reset()
-			} else {
-				// Ending a code block
-				if blockLang == "go" || blockLang == "" {
-					blocks = append(blocks, currentBlock.String())
-				}
-				inBlock = false
-				blockLang = ""
-			}
-		} else if inBlock {
-			currentBlock.WriteString(line)
-			currentBlock.WriteString("\n")
-		}
+	if len(s.messages) > n {
+		s.messages = s.messages[len(s.messages)-n:]
 	}
+}
 
-	return blocks
+// ExportConversation exports the conversation as a string.
+func (s *Session) ExportConversation() string {
+	var sb strings.Builder
+	
+	sb.WriteString("# Mihani Code Conversation\n")
+	sb.WriteString(fmt.Sprintf("Started: %s\n\n", s.createdAt.Format(time.RFC3339)))
+	
+	for _, msg := range s.messages {
+		role := strings.Title(msg.Role)
+		sb.WriteString(fmt.Sprintf("## %s\n\n", role))
+		sb.WriteString(msg.Content)
+		sb.WriteString("\n\n")
+	}
+	
+	return sb.String()
 }

@@ -1,4 +1,3 @@
-// Package fileops provides file reading and editing capabilities.
 package fileops
 
 import (
@@ -8,22 +7,47 @@ import (
 	"strings"
 )
 
-// FileInfo represents information about a file.
+// FileInfo contains information about a file.
 type FileInfo struct {
 	Path    string
+	Content string
 	Size    int64
 	Lines   int
-	Content string
 }
 
 // ReadFile reads a file and returns its content with metadata.
-func ReadFile(path string) (*FileInfo, error) {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve path: %w", err)
+func ReadFile(filePath string) (*FileInfo, error) {
+	// Resolve to absolute path if relative
+	if !filepath.IsAbs(filePath) {
+		absPath, err := filepath.Abs(filePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve path: %w", err)
+		}
+		filePath = absPath
 	}
 
-	data, err := os.ReadFile(absPath)
+	// Check if file exists
+	info, err := os.Stat(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("file does not exist: %s", filePath)
+		}
+		return nil, fmt.Errorf("failed to stat file: %w", err)
+	}
+
+	// Check if it's a regular file
+	if info.IsDir() {
+		return nil, fmt.Errorf("path is a directory, not a file: %s", filePath)
+	}
+
+	// Check file size (limit to 1MB for safety)
+	const maxSize = 1 << 20
+	if info.Size() > maxSize {
+		return nil, fmt.Errorf("file too large (max 1MB): %d bytes", info.Size())
+	}
+
+	// Read file content
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
@@ -32,26 +56,32 @@ func ReadFile(path string) (*FileInfo, error) {
 	lines := strings.Count(content, "\n") + 1
 
 	return &FileInfo{
-		Path:    absPath,
-		Size:    int64(len(data)),
-		Lines:   lines,
+		Path:    filePath,
 		Content: content,
+		Size:    info.Size(),
+		Lines:   lines,
 	}, nil
 }
 
 // WriteFile writes content to a file, creating directories if needed.
-func WriteFile(path string, content string) error {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("failed to resolve path: %w", err)
+func WriteFile(filePath, content string) error {
+	// Resolve to absolute path if relative
+	if !filepath.IsAbs(filePath) {
+		absPath, err := filepath.Abs(filePath)
+		if err != nil {
+			return fmt.Errorf("failed to resolve path: %w", err)
+		}
+		filePath = absPath
 	}
 
-	dir := filepath.Dir(absPath)
+	// Create parent directories if they don't exist
+	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	if err := os.WriteFile(absPath, []byte(content), 0644); err != nil {
+	// Write file
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
 	}
 
@@ -59,39 +89,93 @@ func WriteFile(path string, content string) error {
 }
 
 // AppendFile appends content to an existing file.
-func AppendFile(path string, content string) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+func AppendFile(filePath, content string) error {
+	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
 	}
 	defer f.Close()
 
 	if _, err := f.WriteString(content); err != nil {
-		return fmt.Errorf("failed to append content: %w", err)
+		return fmt.Errorf("failed to append to file: %w", err)
 	}
 
-	return nil
-}
-
-// DeleteFile removes a file.
-func DeleteFile(path string) error {
-	if err := os.Remove(path); err != nil {
-		return fmt.Errorf("failed to delete file: %w", err)
-	}
 	return nil
 }
 
 // FileExists checks if a file exists.
-func FileExists(path string) bool {
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
+func FileExists(filePath string) bool {
+	info, err := os.Stat(filePath)
+	if err != nil {
 		return false
 	}
 	return !info.IsDir()
 }
 
-// ListFiles lists files in a directory matching optional patterns.
-func ListFiles(dir string, patterns ...string) ([]string, error) {
+// DirExists checks if a directory exists.
+func DirExists(dirPath string) bool {
+	info, err := os.Stat(dirPath)
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
+}
+
+// DeleteFile deletes a file.
+func DeleteFile(filePath string) error {
+	if err := os.Remove(filePath); err != nil {
+		return fmt.Errorf("failed to delete file: %w", err)
+	}
+	return nil
+}
+
+// CopyFile copies a file from source to destination.
+func CopyFile(src, dst string) error {
+	content, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("failed to read source file: %w", err)
+	}
+
+	if err := WriteFile(dst, string(content)); err != nil {
+		return fmt.Errorf("failed to write destination file: %w", err)
+	}
+
+	return nil
+}
+
+// FormatFileSize formats a file size in bytes to human-readable format.
+func FormatFileSize(size int64) string {
+	const (
+		KB = 1 << 10
+		MB = 1 << 20
+		GB = 1 << 30
+	)
+
+	switch {
+	case size >= GB:
+		return fmt.Sprintf("%.2f GB", float64(size)/float64(GB))
+	case size >= MB:
+		return fmt.Sprintf("%.2f MB", float64(size)/float64(MB))
+	case size >= KB:
+		return fmt.Sprintf("%.2f KB", float64(size)/float64(KB))
+	default:
+		return fmt.Sprintf("%d bytes", size)
+	}
+}
+
+// GetFileExtension returns the extension of a file.
+func GetFileExtension(filePath string) string {
+	return strings.TrimPrefix(filepath.Ext(filePath), ".")
+}
+
+// IsGoFile checks if a file is a Go source file.
+func IsGoFile(filePath string) bool {
+	ext := GetFileExtension(filePath)
+	return ext == "go"
+}
+
+// ListFiles lists files in a directory matching a pattern.
+func ListFiles(dir, pattern string) ([]string, error) {
 	var files []string
 
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
@@ -99,32 +183,16 @@ func ListFiles(dir string, patterns ...string) ([]string, error) {
 			return err
 		}
 
-		if info.IsDir() {
-			// Skip hidden directories and common non-essential dirs
-			name := info.Name()
-			if strings.HasPrefix(name, ".") && name != "." {
-				return filepath.SkipDir
+		if !info.IsDir() {
+			matched, err := filepath.Match(pattern, info.Name())
+			if err != nil {
+				return err
 			}
-			if name == "vendor" || name == "node_modules" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// Check patterns
-		if len(patterns) > 0 {
-			matched := false
-			for _, pattern := range patterns {
-				if matched, _ = filepath.Match(pattern, info.Name()); matched {
-					break
-				}
-			}
-			if !matched {
-				return nil
+			if matched {
+				files = append(files, path)
 			}
 		}
 
-		files = append(files, path)
 		return nil
 	})
 
@@ -135,31 +203,17 @@ func ListFiles(dir string, patterns ...string) ([]string, error) {
 	return files, nil
 }
 
-// CreateBackup creates a backup of a file.
-func CreateBackup(path string) (string, error) {
-	info, err := ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-
-	backupPath := path + ".bak"
-	if err := os.WriteFile(backupPath, []byte(info.Content), 0644); err != nil {
-		return "", fmt.Errorf("failed to create backup: %w", err)
-	}
-
-	return backupPath, nil
+// EnsureDir ensures a directory exists, creating it if necessary.
+func EnsureDir(dirPath string) error {
+	return os.MkdirAll(dirPath, 0755)
 }
 
-// FormatFileSize formats a file size in bytes to human-readable format.
-func FormatFileSize(size int64) string {
-	const unit = 1024
-	if size < unit {
-		return fmt.Sprintf("%d B", size)
+// GetTempFile creates a temporary file and returns its path.
+func GetTempFile(prefix string) (string, error) {
+	tmpFile, err := os.CreateTemp("", prefix+"-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}
-	div, exp := int64(unit), 0
-	for n := size / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(size)/float64(div), "KMGTPE"[exp])
+	tmpFile.Close()
+	return tmpFile.Name(), nil
 }

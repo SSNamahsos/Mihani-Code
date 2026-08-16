@@ -1,4 +1,3 @@
-// Package history manages command and chat history.
 package history
 
 import (
@@ -6,191 +5,304 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
-// Entry represents a single history entry.
+// Entry represents a history entry.
 type Entry struct {
-	Timestamp time.Time `json:"timestamp"`
-	Type      string    `json:"type"` // "command", "chat", "file_op"
+	ID        string    `json:"id"`
+	Type      string    `json:"type"`
 	Content   string    `json:"content"`
-	Metadata  string    `json:"metadata,omitempty"`
+	Result    string    `json:"result,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+	SessionID string    `json:"session_id"`
 }
 
-// Session represents a complete session with multiple entries.
+// Session represents a command session.
 type Session struct {
 	ID        string    `json:"id"`
-	StartTime time.Time `json:"start_time"`
-	EndTime   time.Time `json:"end_time"`
+	StartedAt time.Time `json:"started_at"`
+	EndedAt   time.Time `json:"ended_at,omitempty"`
 	Entries   []Entry   `json:"entries"`
 }
 
-// Manager handles history persistence and retrieval.
+// Manager handles command history persistence.
 type Manager struct {
-	historyFile string
-	maxEntries  int
-	entries     []Entry
-	currentSession *Session
+	filePath  string
+	maxEntries int
+	mu        sync.RWMutex
+	entries   []Entry
+	sessions  map[string]*Session
+	currentSessionID string
+	dirty     bool
 }
 
 // NewManager creates a new history manager.
-func NewManager(historyFile string, maxEntries int) (*Manager, error) {
-	m := &Manager{
-		historyFile: historyFile,
-		maxEntries:  maxEntries,
-		entries:     make([]Entry, 0),
+func NewManager(filePath string, maxEntries int) (*Manager, error) {
+	mgr := &Manager{
+		filePath:  filePath,
+		maxEntries: maxEntries,
+		entries:   make([]Entry, 0),
+		sessions:  make(map[string]*Session),
+		dirty:     false,
 	}
 
-	if err := m.load(); err != nil && !os.IsNotExist(err) {
+	if err := mgr.Load(); err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("failed to load history: %w", err)
 	}
 
-	return m, nil
+	return mgr, nil
 }
 
-// Add adds an entry to the history.
-func (m *Manager) Add(entryType, content, metadata string) {
-	entry := Entry{
-		Timestamp: time.Now(),
-		Type:      entryType,
-		Content:   content,
-		Metadata:  metadata,
+// Load loads history from file.
+func (m *Manager) Load() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	data, err := os.ReadFile(m.filePath)
+	if err != nil {
+		return err
 	}
 
-	m.entries = append(m.entries, entry)
+	var stored struct {
+		Entries  []Entry           `json:"entries"`
+		Sessions map[string]*Session `json:"sessions"`
+	}
 
-	// Trim if exceeds max
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return fmt.Errorf("failed to parse history file: %w", err)
+	}
+
+	m.entries = stored.Entries
+	m.sessions = stored.Sessions
+
+	// Trim to max entries if needed
 	if len(m.entries) > m.maxEntries {
 		m.entries = m.entries[len(m.entries)-m.maxEntries:]
 	}
 
+	return nil
+}
+
+// Save saves history to file.
+func (m *Manager) Save() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !m.dirty {
+		return nil
+	}
+
+	// Ensure directory exists
+	dir := filepath.Dir(m.filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create history directory: %w", err)
+	}
+
+	stored := struct {
+		Entries  []Entry           `json:"entries"`
+		Sessions map[string]*Session `json:"sessions"`
+	}{
+		Entries:  m.entries,
+		Sessions: m.sessions,
+	}
+
+	data, err := json.MarshalIndent(stored, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal history: %w", err)
+	}
+
+	if err := os.WriteFile(m.filePath, data, 0600); err != nil {
+		return fmt.Errorf("failed to write history file: %w", err)
+	}
+
+	m.dirty = false
+	return nil
+}
+
+// Add adds a new entry to history.
+func (m *Manager) Add(entryType, content, result string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entry := Entry{
+		ID:        fmt.Sprintf("entry-%d-%d", time.Now().UnixNano(), len(m.entries)),
+		Type:      entryType,
+		Content:   content,
+		Result:    result,
+		Timestamp: time.Now(),
+		SessionID: m.currentSessionID,
+	}
+
+	m.entries = append(m.entries, entry)
+	m.dirty = true
+
 	// Add to current session
-	if m.currentSession != nil {
-		m.currentSession.Entries = append(m.currentSession.Entries, entry)
+	if m.currentSessionID != "" {
+		if session, ok := m.sessions[m.currentSessionID]; ok {
+			session.Entries = append(session.Entries, entry)
+		}
+	}
+
+	// Trim to max entries
+	if len(m.entries) > m.maxEntries {
+		m.entries = m.entries[len(m.entries)-m.maxEntries:]
 	}
 }
 
-// GetRecent returns the most recent entries.
+// StartSession starts a new session.
+func (m *Manager) StartSession(sessionID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.currentSessionID = sessionID
+	m.sessions[sessionID] = &Session{
+		ID:        sessionID,
+		StartedAt: time.Now(),
+		Entries:   make([]Entry, 0),
+	}
+	m.dirty = true
+}
+
+// EndSession ends the current session.
+func (m *Manager) EndSession() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.currentSessionID != "" {
+		if session, ok := m.sessions[m.currentSessionID]; ok {
+			session.EndedAt = time.Now()
+		}
+	}
+	m.dirty = true
+}
+
+// GetRecent returns recent history entries.
 func (m *Manager) GetRecent(n int) []Entry {
-	if n > len(m.entries) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if n <= 0 || n > len(m.entries) {
 		n = len(m.entries)
 	}
+
 	start := len(m.entries) - n
+	if start < 0 {
+		start = 0
+	}
+
 	return m.entries[start:]
 }
 
 // GetAll returns all history entries.
 func (m *Manager) GetAll() []Entry {
-	return m.entries
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]Entry, len(m.entries))
+	copy(result, m.entries)
+	return result
 }
 
-// Search searches history by content.
+// Search searches history by query.
 func (m *Manager) Search(query string) []Entry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	var results []Entry
+	queryLower := toLower(query)
+
 	for _, entry := range m.entries {
-		if containsIgnoreCase(entry.Content, query) {
+		if containsIgnoreCase(entry.Content, queryLower) ||
+		   containsIgnoreCase(entry.Type, queryLower) ||
+		   containsIgnoreCase(entry.Result, queryLower) {
 			results = append(results, entry)
 		}
 	}
+
 	return results
 }
 
+// GetSession returns a session by ID.
+func (m *Manager) GetSession(sessionID string) *Session {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return m.sessions[sessionID]
+}
+
+// GetSessions returns all sessions.
+func (m *Manager) GetSessions() []*Session {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+
+	return sessions
+}
+
 // Clear clears all history.
-func (m *Manager) Clear() error {
+func (m *Manager) Clear() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.entries = make([]Entry, 0)
-	if m.currentSession != nil {
-		m.currentSession.Entries = make([]Entry, 0)
-	}
-	return m.save()
+	m.sessions = make(map[string]*Session)
+	m.currentSessionID = ""
+	m.dirty = true
 }
 
-// StartSession begins a new session.
-func (m *Manager) StartSession(id string) {
-	m.currentSession = &Session{
-		ID:        id,
-		StartTime: time.Now(),
-		Entries:   make([]Entry, 0),
+// ClearSession clears a specific session.
+func (m *Manager) ClearSession(sessionID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.sessions, sessionID)
+	m.dirty = true
+}
+
+// Stats returns history statistics.
+func (m *Manager) Stats() map[string]interface{} {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return map[string]interface{}{
+		"total_entries":  len(m.entries),
+		"total_sessions": len(m.sessions),
+		"max_entries":    m.maxEntries,
+		"file_path":      m.filePath,
 	}
 }
 
-// EndSession ends the current session.
-func (m *Manager) EndSession() {
-	if m.currentSession != nil {
-		m.currentSession.EndTime = time.Now()
+func toLower(s string) string {
+	result := make([]rune, len(s))
+	for i, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			result[i] = r + 32
+		} else {
+			result[i] = r
+		}
 	}
+	return string(result)
 }
 
-// GetCurrentSession returns the current session.
-func (m *Manager) GetCurrentSession() *Session {
-	return m.currentSession
-}
-
-// Save persists history to disk.
-func (m *Manager) save() error {
-	dir := filepath.Dir(m.historyFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create history directory: %w", err)
-	}
-
-	data, err := json.MarshalIndent(m.entries, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal history: %w", err)
-	}
-
-	if err := os.WriteFile(m.historyFile, data, 0600); err != nil {
-		return fmt.Errorf("failed to write history file: %w", err)
-	}
-
-	return nil
-}
-
-// Save saves history to disk (public method).
-func (m *Manager) Save() error {
-	return m.save()
-}
-
-// load reads history from disk.
-func (m *Manager) load() error {
-	data, err := os.ReadFile(m.historyFile)
-	if err != nil {
-		return err
-	}
-
-	if err := json.Unmarshal(data, &m.entries); err != nil {
-		return fmt.Errorf("failed to unmarshal history: %w", err)
-	}
-
-	return nil
-}
-
-// containsIgnoreCase checks if s contains substr (case-insensitive).
 func containsIgnoreCase(s, substr string) bool {
-	return len(s) >= len(substr) && 
-		(s == substr || 
-		 len(substr) == 0 ||
-		 containsLower(s, substr))
+	sLower := toLower(s)
+	return len(sLower) >= len(substr) && (sLower == substr || findSubstring(sLower, substr))
 }
 
-func containsLower(s, substr string) bool {
-	sLower := toLower(s)
-	substrLower := toLower(substr)
-	for i := 0; i <= len(sLower)-len(substrLower); i++ {
-		if sLower[i:i+len(substrLower)] == substrLower {
+func findSubstring(s, substr string) bool {
+	if len(substr) == 0 {
+		return true
+	}
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
 			return true
 		}
 	}
 	return false
-}
-
-func toLower(s string) string {
-	result := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			result[i] = c + 32
-		} else {
-			result[i] = c
-		}
-	}
-	return string(result)
 }

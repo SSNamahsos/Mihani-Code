@@ -1,194 +1,271 @@
-// Package scanner provides codebase scanning capabilities.
 package scanner
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
-// ScanResult represents the result of scanning a directory.
-type ScanResult struct {
-	RootDir      string
-	TotalFiles   int
-	GoFiles      int
-	TotalLines   int
-	GoLines      int
-	Packages     []PackageInfo
-	FileSummary  []FileSummary
-}
-
 // PackageInfo contains information about a Go package.
 type PackageInfo struct {
+	Name      string
+	Path      string
+	Files     []string
+	Functions []*FuncInfo
+	Types     []*TypeInfo
+	Imports   []string
+}
+
+// FuncInfo contains information about a function.
+type FuncInfo struct {
 	Name       string
-	Path       string
-	NumFiles   int
-	NumFuncs   int
-	NumTypes   int
+	Receiver   string
+	IsMethod   bool
+	IsExported bool
+	Line       int
 }
 
-// FileSummary contains summary info for a file.
-type FileSummary struct {
-	Path    string
-	Lines   int
-	Size    int64
-	Package string
+// TypeInfo contains information about a type.
+type TypeInfo struct {
+	Name       string
+	Kind       string // struct, interface, type alias
+	IsExported bool
+	Line       int
 }
 
-// ScanDirectory scans a directory and returns information about its contents.
-func ScanDirectory(root string) (*ScanResult, error) {
+// ScanResult contains the result of scanning a directory.
+type ScanResult struct {
+	Packages    []*PackageInfo
+	TotalFiles  int
+	TotalLines  int
+	TotalFuncs  int
+	TotalTypes  int
+}
+
+// ScanDirectory scans a directory for Go files and returns package information.
+func ScanDirectory(dir string) (*ScanResult, error) {
 	result := &ScanResult{
-		RootDir: root,
+		Packages: make([]*PackageInfo, 0),
 	}
 
-	packageMap := make(map[string]*PackageInfo)
+	packages := make(map[string]*PackageInfo)
 
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip hidden directories and common non-essential dirs
+		// Skip hidden directories and vendor
 		if info.IsDir() {
 			name := info.Name()
-			if strings.HasPrefix(name, ".") && path != root {
-				return filepath.SkipDir
-			}
-			if name == "vendor" || name == "node_modules" || name == "__pycache__" {
+			if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
 		// Only process Go files
-		if !strings.HasSuffix(info.Name(), ".go") {
+		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
 
 		result.TotalFiles++
-		result.GoFiles++
 
-		// Read file content
-		data, err := os.ReadFile(path)
+		// Parse the file
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 		if err != nil {
-			return nil // Skip unreadable files
+			// Skip files that can't be parsed
+			return nil
 		}
 
-		content := string(data)
-		lines := strings.Count(content, "\n") + 1
-		result.TotalLines += lines
-		result.GoLines += lines
-
-		// Extract package name
-		pkgName := extractPackageName(content)
-		relPath := filepath.Dir(strings.TrimPrefix(path, root))
-		if relPath == "." {
-			relPath = ""
+		// Get or create package info
+		pkgName := file.Name.Name
+		pkgPath := filepath.Dir(path)
+		
+		key := pkgPath + ":" + pkgName
+		pkg, exists := packages[key]
+		if !exists {
+			pkg = &PackageInfo{
+				Name:      pkgName,
+				Path:      pkgPath,
+				Files:     make([]string, 0),
+				Functions: make([]*FuncInfo, 0),
+				Types:     make([]*TypeInfo, 0),
+				Imports:   make([]string, 0),
+			}
+			packages[key] = pkg
 		}
 
-		// Update package info
-		pkgKey := filepath.Join(relPath, pkgName)
-		if _, exists := packageMap[pkgKey]; !exists {
-			packageMap[pkgKey] = &PackageInfo{
-				Name: pkgName,
-				Path: relPath,
+		pkg.Files = append(pkg.Files, path)
+
+		// Count lines
+		result.TotalLines += fset.File(file.Pos()).LineCount()
+
+		// Extract imports
+		importSet := make(map[string]bool)
+		for _, imp := range file.Imports {
+			importPath := strings.Trim(imp.Path.Value, "\"")
+			if !importSet[importPath] {
+				importSet[importPath] = true
+				pkg.Imports = append(pkg.Imports, importPath)
 			}
 		}
-		packageMap[pkgKey].NumFiles++
-		packageMap[pkgKey].NumFuncs += countFunctions(content)
-		packageMap[pkgKey].NumTypes += countTypes(content)
 
-		result.FileSummary = append(result.FileSummary, FileSummary{
-			Path:    strings.TrimPrefix(path, root+"/"),
-			Lines:   lines,
-			Size:    info.Size(),
-			Package: pkgName,
+		// Extract functions and types
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.FuncDecl:
+				funcInfo := &FuncInfo{
+					Name:       node.Name.Name,
+					IsExported: node.Name.IsExported(),
+					Line:       fset.Position(node.Pos()).Line,
+				}
+
+				if node.Recv != nil && len(node.Recv.List) > 0 {
+					funcInfo.IsMethod = true
+					recvType := node.Recv.List[0].Type
+					if starExpr, ok := recvType.(*ast.StarExpr); ok {
+						if ident, ok := starExpr.X.(*ast.Ident); ok {
+							funcInfo.Receiver = ident.Name
+						}
+					} else if ident, ok := recvType.(*ast.Ident); ok {
+						funcInfo.Receiver = ident.Name
+					}
+				}
+
+				pkg.Functions = append(pkg.Functions, funcInfo)
+				result.TotalFuncs++
+
+			case *ast.TypeSpec:
+				typeInfo := &TypeInfo{
+					Name:       node.Name.Name,
+					IsExported: node.Name.IsExported(),
+					Line:       fset.Position(node.Pos()).Line,
+				}
+
+				switch node.Type.(type) {
+				case *ast.StructType:
+					typeInfo.Kind = "struct"
+				case *ast.InterfaceType:
+					typeInfo.Kind = "interface"
+				default:
+					typeInfo.Kind = "type"
+				}
+
+				pkg.Types = append(pkg.Types, typeInfo)
+				result.TotalTypes++
+			}
+
+			return true
 		})
 
 		return nil
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to scan directory: %w", err)
+		return nil, fmt.Errorf("failed to walk directory: %w", err)
 	}
 
-	// Convert package map to slice
-	for _, pkg := range packageMap {
-		result.Packages = append(result.Packages, *pkg)
+	// Convert map to slice
+	for _, pkg := range packages {
+		result.Packages = append(result.Packages, pkg)
 	}
+
+	// Sort packages by path
+	sort.Slice(result.Packages, func(i, j int) bool {
+		return result.Packages[i].Path < result.Packages[j].Path
+	})
 
 	return result, nil
 }
 
-// extractPackageName extracts the package name from Go source code.
-func extractPackageName(content string) string {
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "package ") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				return parts[1]
+// GetContextSummary generates a summary of the codebase context.
+func GetContextSummary(dir string) (string, error) {
+	result, err := ScanDirectory(dir)
+	if err != nil {
+		return "", err
+	}
+
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf("📊 Codebase Summary\n"))
+	sb.WriteString(fmt.Sprintf("==================\n\n"))
+	sb.WriteString(fmt.Sprintf("📁 Total Files:  %d\n", result.TotalFiles))
+	sb.WriteString(fmt.Sprintf("📝 Total Lines:  %d\n", result.TotalLines))
+	sb.WriteString(fmt.Sprintf("🔧 Total Functions: %d\n", result.TotalFuncs))
+	sb.WriteString(fmt.Sprintf("🏷️  Total Types: %d\n\n", result.TotalTypes))
+
+	if len(result.Packages) == 0 {
+		sb.WriteString("No Go packages found.\n")
+		return sb.String(), nil
+	}
+
+	sb.WriteString(fmt.Sprintf("📦 Packages (%d):\n\n", len(result.Packages)))
+
+	for _, pkg := range result.Packages {
+		sb.WriteString(fmt.Sprintf("  📁 %s\n", pkg.Name))
+		sb.WriteString(fmt.Sprintf("     Path: %s\n", pkg.Path))
+		sb.WriteString(fmt.Sprintf("     Files: %d\n", len(pkg.Files)))
+		
+		// Show exported functions
+		exportedFuncs := 0
+		for _, fn := range pkg.Functions {
+			if fn.IsExported {
+				exportedFuncs++
 			}
 		}
-		// Stop after first non-comment, non-empty line that's not a package declaration
-		if line != "" && !strings.HasPrefix(line, "//") && !strings.HasPrefix(line, "/*") {
-			if !strings.HasPrefix(line, "package") {
-				break
+		sb.WriteString(fmt.Sprintf("     Functions: %d (%d exported)\n", len(pkg.Functions), exportedFuncs))
+		
+		// Show exported types
+		exportedTypes := 0
+		for _, t := range pkg.Types {
+			if t.IsExported {
+				exportedTypes++
 			}
 		}
-	}
-	return "unknown"
-}
-
-// countFunctions counts function declarations in Go code.
-func countFunctions(content string) int {
-	count := 0
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "func ") {
-			count++
+		sb.WriteString(fmt.Sprintf("     Types: %d (%d exported)\n", len(pkg.Types), exportedTypes))
+		
+		// Show key imports (limit to 5)
+		if len(pkg.Imports) > 0 {
+			sb.WriteString("     Imports: ")
+			limit := 5
+			if len(pkg.Imports) < limit {
+				limit = len(pkg.Imports)
+			}
+			for i, imp := range pkg.Imports[:limit] {
+				if i > 0 {
+					sb.WriteString(", ")
+				}
+				sb.WriteString(imp)
+			}
+			if len(pkg.Imports) > limit {
+				sb.WriteString(fmt.Sprintf(" ... and %d more", len(pkg.Imports)-limit))
+			}
+			sb.WriteString("\n")
 		}
+		
+		sb.WriteString("\n")
 	}
-	return count
-}
 
-// countTypes counts type declarations (struct, interface, etc.) in Go code.
-func countTypes(content string) int {
-	count := 0
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "type ") {
-			count++
-		}
-	}
-	return count
+	return sb.String(), nil
 }
 
 // FindGoFiles finds all Go files in a directory.
-func FindGoFiles(root string) ([]string, error) {
+func FindGoFiles(dir string) ([]string, error) {
 	var files []string
 
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if info.IsDir() {
-			name := info.Name()
-			if strings.HasPrefix(name, ".") && path != root {
-				return filepath.SkipDir
-			}
-			if name == "vendor" || name == "node_modules" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if strings.HasSuffix(info.Name(), ".go") {
+		if !info.IsDir() && strings.HasSuffix(path, ".go") {
 			files = append(files, path)
 		}
 
@@ -196,32 +273,46 @@ func FindGoFiles(root string) ([]string, error) {
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to find Go files: %w", err)
+		return nil, fmt.Errorf("failed to walk directory: %w", err)
 	}
 
 	return files, nil
 }
 
-// GetContextSummary returns a summary of the codebase for LLM context.
-func GetContextSummary(root string) (string, error) {
-	result, err := ScanDirectory(root)
+// FindFunction finds a specific function in the codebase.
+func FindFunction(dir, funcName string) ([]*FuncInfo, error) {
+	result, err := ScanDirectory(dir)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Codebase Summary for: %s\n", result.RootDir))
-	sb.WriteString(fmt.Sprintf("Total Go Files: %d\n", result.GoFiles))
-	sb.WriteString(fmt.Sprintf("Total Lines of Go Code: %d\n", result.GoLines))
-	sb.WriteString(fmt.Sprintf("Packages Found: %d\n\n", len(result.Packages)))
-
-	if len(result.Packages) > 0 {
-		sb.WriteString("Packages:\n")
-		for _, pkg := range result.Packages {
-			sb.WriteString(fmt.Sprintf("  - %s (%s): %d files, %d funcs, %d types\n",
-				pkg.Name, pkg.Path, pkg.NumFiles, pkg.NumFuncs, pkg.NumTypes))
+	var matches []*FuncInfo
+	for _, pkg := range result.Packages {
+		for _, fn := range pkg.Functions {
+			if fn.Name == funcName {
+				matches = append(matches, fn)
+			}
 		}
 	}
 
-	return sb.String(), nil
+	return matches, nil
+}
+
+// FindType finds a specific type in the codebase.
+func FindType(dir, typeName string) ([]*TypeInfo, error) {
+	result, err := ScanDirectory(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	var matches []*TypeInfo
+	for _, pkg := range result.Packages {
+		for _, t := range pkg.Types {
+			if t.Name == typeName {
+				matches = append(matches, t)
+			}
+		}
+	}
+
+	return matches, nil
 }

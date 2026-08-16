@@ -12,10 +12,12 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/SSNamahsos/Mihani-Code/internal/chat"
 	"github.com/SSNamahsos/Mihani-Code/internal/config"
 	"github.com/SSNamahsos/Mihani-Code/internal/fileops"
+	"github.com/SSNamahsos/Mihani-Code/internal/git"
 	"github.com/SSNamahsos/Mihani-Code/internal/history"
 	"github.com/SSNamahsos/Mihani-Code/internal/llm"
 	"github.com/SSNamahsos/Mihani-Code/internal/scanner"
@@ -29,8 +31,10 @@ const (
 	ColorYellow = "\033[33m"
 	ColorBlue   = "\033[34m"
 	ColorCyan   = "\033[36m"
+	ColorMagenta = "\033[35m"
 	ColorReset  = "\033[0m"
 	ColorBold   = "\033[1m"
+	ColorDim    = "\033[2m"
 )
 
 // App represents the main application.
@@ -43,6 +47,8 @@ type App struct {
 	reader        *bufio.Reader
 	currentDir    string
 	isOnline      bool
+	providerName  string
+	showTips      bool
 }
 
 // NewApp creates a new application instance.
@@ -56,7 +62,11 @@ func NewApp() (*App, error) {
 
 	// Initialize history manager
 	homeDir, _ := os.UserHomeDir()
-	historyFile := filepath.Join(homeDir, ".mihanicode", "history.json")
+	historyDir := filepath.Join(homeDir, ".mihanicode")
+	if err := os.MkdirAll(historyDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create history directory: %w", err)
+	}
+	historyFile := filepath.Join(historyDir, "history.json")
 	historyMgr, err := history.NewManager(historyFile, cfg.MaxHistory)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize history: %w", err)
@@ -65,6 +75,7 @@ func NewApp() (*App, error) {
 	// Initialize LLM client
 	var llmClient llm.Client
 	var isOnline bool
+	var providerName string
 
 	provider := llm.Provider(cfg.DefaultProvider)
 	if provider == llm.ProviderNone {
@@ -82,12 +93,15 @@ func NewApp() (*App, error) {
 			fmt.Fprintf(os.Stderr, "Warning: Failed to initialize LLM client: %v\n", err)
 			llmClient = llm.NewStandaloneClient()
 			isOnline = false
+			providerName = "offline"
 		} else {
 			isOnline = true
+			providerName = string(provider)
 		}
 	} else {
 		llmClient = llm.NewStandaloneClient()
 		isOnline = false
+		providerName = "offline"
 	}
 
 	// Initialize chat session
@@ -111,18 +125,25 @@ func NewApp() (*App, error) {
 		reader:       bufio.NewReader(os.Stdin),
 		currentDir:   currentDir,
 		isOnline:     isOnline,
+		providerName: providerName,
+		showTips:     true,
 	}, nil
 }
 
 // printBanner displays the startup banner with branding.
 func (a *App) printBanner() {
 	banner := `
-` + ColorBold + ColorRed + `███╗   ███╗ █████╗  ██████╗██████╗ ` + ColorReset + `██████╗  ██████╗ 
-` + ColorBold + ColorRed + `████╗ ████║██╔══██╗██╔════╝██╔══██╗` + ColorReset + `██╔══██╗██╔═══██╗
-` + ColorBold + ColorRed + `██╔████╔██║███████║██║     ██████╔╝` + ColorReset + `██████╔╝██║   ██║
-` + ColorBold + ColorRed + `██║╚██╔╝██║██╔══██║██║     ██╔══██╗` + ColorReset + `██╔═══╝ ██║   ██║
-` + ColorBold + ColorRed + `██║ ╚═╝ ██║██║  ██║╚██████╗██║  ██║` + ColorReset + `██║     ╚██████╔╝
-` + ColorBold + ColorRed + `╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝` + ColorReset + `╚═╝      ╚═════╝ 
+` + ColorBold + ColorRed + `╔═══════════════════════════════════════════════════════════╗
+║                                                           ║
+║   ███╗   ██╗ ██████╗  ████████╗██████╗ ` + ColorReset + `██████╗  ██████╗ ` + ColorRed + `
+║   ████╗ ████║██╔═══██╗╚══██╔══╝██╔══██╗` + ColorReset + `██╔══██╗██╔═══██╗` + ColorRed + `
+║   ██╔████╔██║███████║   ██║   ██████╔╝` + ColorReset + `██████╔╝██║   ██║` + ColorRed + `
+║   ██║╚██╔╝██║██╔══██║   ██║   ██╔══██╗` + ColorReset + `██╔═══╝ ██║   ██║` + ColorRed + `
+║   ██║ ╚═╝ ██║██║  ██║   ██║   ██║  ██║` + ColorReset + `██║     ╚██████╔╝` + ColorRed + `
+║   ╚═╝     ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝` + ColorReset + `╚═╝      ╚═════╝ ` + ColorRed + `
+║                                                           ║
+╚═══════════════════════════════════════════════════════════╝` + ColorReset + `
+
 ` + ColorCyan + `Mihani ` + ColorReset + `Code - Your Go Programming Assistant
 ` + ColorYellow + `Made by Faz Pad Studio` + ColorReset + `
 `
@@ -130,20 +151,60 @@ func (a *App) printBanner() {
 	fmt.Println(banner)
 
 	if a.isOnline {
-		fmt.Printf("%s✓%s Online mode enabled (%s)\n\n", ColorGreen, ColorReset, a.cfg.DefaultProvider)
+		fmt.Printf("%s✓%s Online mode enabled (%s)%s\n\n", ColorGreen, ColorReset, ColorBold+a.providerName+ColorReset, ColorDim)
 	} else {
-		fmt.Printf("%s⚠%s Running in offline/standalone mode\n", ColorYellow, ColorReset)
-		fmt.Printf("Set OPENAI_API_KEY or ANTHROPIC_API_KEY for full AI features\n\n")
+		fmt.Printf("%s⚠%s Running in %soffline/standalone mode%s\n", ColorYellow, ColorReset, ColorBold, ColorReset)
+		fmt.Printf("%sSet OPENAI_API_KEY or ANTHROPIC_API_KEY for full AI features%s\n\n", ColorDim, ColorReset)
 	}
+
+	// Show quick tips
+	a.showQuickTips()
+}
+
+// showQuickTips displays helpful tips for new users.
+func (a *App) showQuickTips() {
+	if !a.showTips {
+		return
+	}
+
+	tips := []string{
+		fmt.Sprintf("%s/%sTry %s/help%s to see all commands", ColorDim, ColorReset, ColorBold, ColorReset),
+		fmt.Sprintf("%s/%sUse %s/scan%s to analyze your codebase", ColorDim, ColorReset, ColorBold, ColorReset),
+		fmt.Sprintf("%s/%sPress %sCtrl+C%s to interrupt long operations", ColorDim, ColorReset, ColorBold, ColorReset),
+	}
+
+	fmt.Print(ColorDim)
+	for i, tip := range tips {
+		if i > 0 {
+			fmt.Print("  •  ")
+		}
+		fmt.Print(tip)
+		if i < len(tips)-1 {
+			fmt.Print("\n         ")
+		}
+	}
+	fmt.Println(ColorReset)
+	fmt.Println()
 }
 
 // printPrompt displays the input prompt with branding.
 func (a *App) printPrompt() {
-	status := "[offline]"
+	status := ColorYellow + "[offline]" + ColorReset
 	if a.isOnline {
-		status = "[online]"
+		status = ColorGreen + "[online]" + ColorReset
 	}
-	prompt := fmt.Sprintf("%sMihani%s Code %s > ", ColorRed, ColorReset, status)
+	
+	// Truncate long paths
+	dir := a.currentDir
+	homeDir, _ := os.UserHomeDir()
+	if strings.HasPrefix(dir, homeDir) {
+		dir = "~" + dir[len(homeDir):]
+	}
+	if len(dir) > 30 {
+		dir = "..." + dir[len(dir)-27:]
+	}
+	
+	prompt := fmt.Sprintf("%sMihani%s Code %s %s%s%s › ", ColorRed, ColorReset, status, ColorDim, dir, ColorReset)
 	fmt.Print(prompt)
 }
 
@@ -152,7 +213,7 @@ func (a *App) Run() {
 	a.printBanner()
 
 	// Start a new session
-	sessionID := fmt.Sprintf("session-%d", os.Getpid())
+	sessionID := fmt.Sprintf("session-%d", time.Now().Unix())
 	a.historyMgr.StartSession(sessionID)
 
 	// Handle graceful shutdown
@@ -172,7 +233,6 @@ func (a *App) Run() {
 		input, err := a.reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
-				// End of input (e.g., piped input or Ctrl+D)
 				fmt.Println()
 				a.cleanup()
 				os.Exit(0)
@@ -197,7 +257,7 @@ func (a *App) Run() {
 		// Save history periodically
 		if a.cfg.AutoSaveSession {
 			if err := a.historyMgr.Save(); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: Failed to save history: %v\n", err)
+				fmt.Fprintf(os.Stderr, "%sWarning:%s Failed to save history: %v\n", ColorYellow, ColorReset, err)
 			}
 		}
 	}
@@ -213,7 +273,7 @@ func (a *App) processCommand(input string) error {
 	// Regular chat message
 	ctx := context.Background()
 	
-	fmt.Printf("\n%sMihani%s Code is thinking...\n\n", ColorRed, ColorReset)
+	fmt.Printf("\n%sMihani%s Code is thinking%s...\n\n", ColorRed, ColorReset, ColorDim)
 	
 	response, err := a.chatSession.Chat(ctx, input)
 	if err != nil {
@@ -236,7 +296,7 @@ func (a *App) handleSlashCommand(input string) error {
 	case "/help", "/h", "/?":
 		return a.cmdHelp(args)
 	case "/quit", "/exit", "/q":
-		fmt.Printf("%sMihani%s Code: Goodbye!\n", ColorRed, ColorReset)
+		fmt.Printf("%sMihani%s Code: Goodbye! Happy coding! 🚀\n", ColorRed, ColorReset)
 		a.cleanup()
 		os.Exit(0)
 	case "/clear", "/cls":
@@ -248,6 +308,12 @@ func (a *App) handleSlashCommand(input string) error {
 		return a.cmdRefactor(args)
 	case "/generate", "/gen":
 		return a.cmdGenerate(args)
+	case "/review":
+		return a.cmdReview(args)
+	case "/debug":
+		return a.cmdDebug(args)
+	case "/test":
+		return a.cmdTest(args)
 	case "/read", "/cat":
 		return a.cmdRead(args)
 	case "/write", "/edit":
@@ -266,6 +332,10 @@ func (a *App) handleSlashCommand(input string) error {
 		return a.cmdAbout(args)
 	case "/status":
 		return a.cmdStatus(args)
+	case "/git":
+		return a.cmdGit(args)
+	case "/tools":
+		return a.cmdTools(args)
 	default:
 		return fmt.Errorf("unknown command: %s (use /help for available commands)", cmd)
 	}
@@ -276,45 +346,51 @@ func (a *App) handleSlashCommand(input string) error {
 // cmdHelp displays help information.
 func (a *App) cmdHelp(args []string) error {
 	helpText := `
-%sMihani%s Code - Available Commands
-=====================================
+%s╔══════════════════════════════════════════════════════════╗
+║           Mihani Code - Available Commands                ║
+╚══════════════════════════════════════════════════════════╝%s
 
-%sChat Commands:%s
-  (no prefix)     Send a message to the AI assistant
-  /clear          Clear conversation history
-
-%sFile Operations:%s
-  /read <file>    View contents of a file
-  /write <file>   Create or overwrite a file (enters multi-line mode)
-  /scan [dir]     Scan directory for Go files and show summary
-
-%sCode Assistance:%s
-  /explain <file> Explain code in a file
-  /refactor <file> [instruction]  Refactor code with specific instructions
+%s📌 Chat & AI Commands:%s
+  (no prefix)      Send a message to the AI assistant
+  /clear           Clear conversation history
+  /explain <file>  Explain code in a file
+  /refactor <file> [instruction]  Refactor code
   /generate <prompt>  Generate Go code from description
+  /review <file>   Review code for issues and improvements
+  /debug <problem> <code>  Debug a specific issue
+  /test <file>     Generate tests for code
 
-%sSnippets:%s
+%s📁 File Operations:%s
+  /read <file>     View contents of a file
+  /write <file>    Create or overwrite a file (multi-line mode)
+  /scan [dir]      Scan directory for Go files and show summary
+
+%s🧩 Code Snippets:%s
   /snippets [category]  List available code snippets
   /snippet <name> [var=value...]  Insert a code snippet
+  
+  Categories: basic, web, cli, types, patterns, testing, concurrency, utility, database
 
-%sHistory & Config:%s
-  /history [query]  Show command history, optionally search
-  /config           Show current configuration
-  /status           Show current session status
+%s🔧 Tools & Utilities:%s
+  /history [query] Show command history, optionally search
+  /config          Show current configuration
+  /status          Show current session status
+  /tools           List all available tools and capabilities
+  /git [status|log|diff]  Git integration commands
 
-%sOther:%s
-  /help             Show this help message
-  /about            About Mihani Code
-  /quit, /exit      Exit the application
+%sℹ️  Other:%s
+  /help            Show this help message
+  /about           About Mihani Code
+  /quit, /exit     Exit the application
 
-%sTips:%s
-- Press Ctrl+C to interrupt a long operation
-- Use /clear to reset the conversation context
-- Configure API keys via .mihanirc or environment variables
+%s💡 Tips:%s
+  • Press Ctrl+C to interrupt a long operation
+  • Use /clear to reset the conversation context
+  • Configure API keys via ~/.mihanirc or environment variables
+  • All code examples are Go-focused
 
 `
 	fmt.Printf(helpText,
-		ColorRed, ColorReset,
 		ColorBold, ColorReset,
 		ColorBold, ColorReset,
 		ColorBold, ColorReset,
@@ -338,7 +414,7 @@ func (a *App) cmdExplain(args []string) error {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
-	fmt.Printf("Explaining: %s (%d lines)\n\n", info.Path, info.Lines)
+	fmt.Printf("%sExplaining:%s %s (%d lines)\n\n", ColorCyan, ColorReset, info.Path, info.Lines)
 
 	ctx := context.Background()
 	response, err := a.chatSession.ExplainCode(ctx, info.Content)
@@ -367,7 +443,8 @@ func (a *App) cmdRefactor(args []string) error {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
-	fmt.Printf("Refactoring: %s\nInstruction: %s\n\n", info.Path, instruction)
+	fmt.Printf("%sRefactoring:%s %s\n%sInstruction:%s %s\n\n", 
+		ColorCyan, ColorReset, info.Path, ColorCyan, ColorReset, instruction)
 
 	ctx := context.Background()
 	response, err := a.chatSession.RefactorCode(ctx, info.Content, instruction)
@@ -387,12 +464,88 @@ func (a *App) cmdGenerate(args []string) error {
 	}
 
 	prompt := strings.Join(args, " ")
-	fmt.Printf("Generating code for: %s\n\n", prompt)
+	fmt.Printf("%sGenerating code for:%s %s\n\n", ColorCyan, ColorReset, prompt)
 
 	ctx := context.Background()
 	response, err := a.chatSession.GenerateCode(ctx, prompt)
 	if err != nil {
 		return fmt.Errorf("generation failed: %w", err)
+	}
+
+	fmt.Println(response)
+	return nil
+}
+
+// cmdReview reviews code in a file.
+func (a *App) cmdReview(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: /review <file>")
+	}
+
+	filePath := args[0]
+	info, err := fileops.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %w", err)
+	}
+
+	fmt.Printf("%sReviewing:%s %s (%d lines)\n\n", ColorCyan, ColorReset, info.Path, info.Lines)
+
+	ctx := context.Background()
+	response, err := a.chatSession.ReviewCode(ctx, info.Content)
+	if err != nil {
+		return fmt.Errorf("review failed: %w", err)
+	}
+
+	fmt.Println(response)
+	return nil
+}
+
+// cmdDebug helps debug an issue.
+func (a *App) cmdDebug(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: /debug <problem_description> <code_file>")
+	}
+
+	// Last arg is the file, rest is the problem description
+	filePath := args[len(args)-1]
+	problem := strings.Join(args[:len(args)-1], " ")
+
+	info, err := fileops.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %w", err)
+	}
+
+	fmt.Printf("%sDebugging:%s %s\n%sProblem:%s %s\n\n", 
+		ColorCyan, ColorReset, info.Path, ColorCyan, ColorReset, problem)
+
+	ctx := context.Background()
+	response, err := a.chatSession.DebugHelp(ctx, problem, info.Content)
+	if err != nil {
+		return fmt.Errorf("debug failed: %w", err)
+	}
+
+	fmt.Println(response)
+	return nil
+}
+
+// cmdTest generates tests for a file.
+func (a *App) cmdTest(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: /test <file>")
+	}
+
+	filePath := args[0]
+	info, err := fileops.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %w", err)
+	}
+
+	fmt.Printf("%sGenerating tests for:%s %s\n\n", ColorCyan, ColorReset, info.Path)
+
+	ctx := context.Background()
+	response, err := a.chatSession.GenerateTests(ctx, info.Content)
+	if err != nil {
+		return fmt.Errorf("test generation failed: %w", err)
 	}
 
 	fmt.Println(response)
@@ -411,7 +564,8 @@ func (a *App) cmdRead(args []string) error {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
-	fmt.Printf("%s=== %s (%d lines, %s) ===%s\n\n", ColorCyan, info.Path, info.Lines, fileops.FormatFileSize(info.Size), ColorReset)
+	fmt.Printf("%s=== %s (%d lines, %s) ===%s\n\n", 
+		ColorCyan, info.Path, info.Lines, fileops.FormatFileSize(info.Size), ColorReset)
 	fmt.Println(info.Content)
 	return nil
 }
@@ -455,7 +609,7 @@ func (a *App) cmdScan(args []string) error {
 		dir = args[0]
 	}
 
-	fmt.Printf("Scanning: %s\n\n", dir)
+	fmt.Printf("%sScanning:%s %s\n\n", ColorCyan, ColorReset, dir)
 
 	summary, err := scanner.GetContextSummary(dir)
 	if err != nil {
@@ -474,15 +628,20 @@ func (a *App) cmdSnippets(args []string) error {
 	}
 
 	snips := a.snippetReg.List(category)
-	
+
 	if len(snips) == 0 {
-		fmt.Println("No snippets found.")
+		if category != "" {
+			fmt.Printf("No snippets found in category '%s'.\n", category)
+		} else {
+			fmt.Println("No snippets found.")
+		}
 		return nil
 	}
 
 	fmt.Printf("%sAvailable Snippets:%s\n\n", ColorBold, ColorReset)
 	for _, s := range snips {
-		fmt.Printf("  %s%-20s%s [%s] - %s\n", ColorCyan, s.Name, ColorReset, s.Category, s.Description)
+		fmt.Printf("  %s%-20s%s [%s] - %s\n", 
+			ColorCyan, s.Name, ColorReset, s.Category, s.Description)
 	}
 	fmt.Println()
 
@@ -516,7 +675,7 @@ func (a *App) cmdSnippet(args []string) error {
 // cmdHistory shows command history.
 func (a *App) cmdHistory(args []string) error {
 	var entries []history.Entry
-	
+
 	if len(args) > 0 {
 		query := strings.Join(args, " ")
 		entries = a.historyMgr.Search(query)
@@ -547,7 +706,7 @@ func (a *App) cmdHistory(args []string) error {
 // cmdConfig shows current configuration.
 func (a *App) cmdConfig(args []string) error {
 	configPath := config.GetConfigPath()
-	
+
 	fmt.Printf("%sCurrent Configuration:%s\n\n", ColorBold, ColorReset)
 	fmt.Printf("Config file: %s\n", configPath)
 	fmt.Printf("Default provider: %s\n", a.cfg.DefaultProvider)
@@ -555,10 +714,10 @@ func (a *App) cmdConfig(args []string) error {
 	fmt.Printf("Max history: %d\n", a.cfg.MaxHistory)
 	fmt.Printf("Git integration: %v\n", a.cfg.EnableGitIntegration)
 	fmt.Printf("Auto-save session: %v\n", a.cfg.AutoSaveSession)
-	
+
 	hasOpenAI := a.cfg.OpenAIAPIKey != "" || os.Getenv("OPENAI_API_KEY") != ""
 	hasAnthropic := a.cfg.AnthropicAPIKey != "" || os.Getenv("ANTHROPIC_API_KEY") != ""
-	
+
 	fmt.Printf("\n%sAPI Keys:%s\n", ColorBold, ColorReset)
 	fmt.Printf("OpenAI configured: %v\n", hasOpenAI)
 	fmt.Printf("Anthropic configured: %v\n", hasAnthropic)
@@ -570,7 +729,11 @@ func (a *App) cmdConfig(args []string) error {
 // cmdAbout shows about information.
 func (a *App) cmdAbout(args []string) error {
 	aboutText := `
-%sMihani Code%s
+%s╔══════════════════════════════════════════════════════════╗
+║                    Mihani Code                            ║
+║              Made by Faz Pad Studio                       ║
+╚══════════════════════════════════════════════════════════╝%s
+
 Version: 1.0.0
 
 %sDescription:%s
@@ -580,36 +743,27 @@ generation capabilities, along with offline tools for file operations and
 code scanning.
 
 %sFeatures:%s
-- Interactive chat/REPL mode for coding questions
-- File reading and editing from the terminal
-- Code explanation and refactoring (Go-focused)
-- Project/directory scanning for codebase context
-- Code snippet templates for common Go patterns
-- Command history and session persistence
-- Support for OpenAI and Anthropic APIs
-- Graceful offline/standalone mode
+• Interactive chat/REPL mode for coding questions
+• File reading and editing from the terminal
+• Code explanation and refactoring (Go-focused)
+• Project/directory scanning for codebase context
+• Code snippet templates for common Go patterns
+• Command history and session persistence
+• Git integration for version control
+• Offline mode with reduced capabilities
 
-%sCreator:%s
-Made by %sFaz Pad Studio%s
+%sAPI Support:%s
+• OpenAI (GPT-4, GPT-4o-mini, etc.)
+• Anthropic (Claude models)
+• Graceful offline fallback
 
 %sConfiguration:%s
-Create a ~/.mihanirc file (JSON format) to customize settings:
-{
-  "openai_api_key": "your-key-here",
-  "anthropic_api_key": "your-key-here",
-  "default_provider": "openai",
-  "model": "gpt-4o-mini",
-  "max_history": 1000
-}
-
-Or set environment variables:
-- OPENAI_API_KEY
-- ANTHROPIC_API_KEY
+• Environment variables: OPENAI_API_KEY, ANTHROPIC_API_KEY
+• Config file: ~/.mihanirc or ~/.config/mihanicode/config.json
+• Per-session customization
 
 `
 	fmt.Printf(aboutText,
-		ColorRed, ColorReset,
-		ColorBold, ColorReset,
 		ColorBold, ColorReset,
 		ColorBold, ColorReset,
 		ColorBold, ColorReset,
@@ -621,18 +775,124 @@ Or set environment variables:
 
 // cmdStatus shows current session status.
 func (a *App) cmdStatus(args []string) error {
-	stats := a.chatSession.GetStats()
-	
 	fmt.Printf("%sSession Status:%s\n\n", ColorBold, ColorReset)
-	fmt.Printf("Mode: %s\n", map[bool]string{true: "online", false: "offline"}[a.isOnline])
-	fmt.Printf("Provider: %s\n", a.cfg.DefaultProvider)
-	fmt.Printf("Working directory: %s\n", a.currentDir)
-	fmt.Printf("\n%sChat Statistics:%s\n", ColorBold, ColorReset)
-	fmt.Printf("Messages exchanged: %d\n", stats.MessageCount)
-	fmt.Printf("User messages: %d\n", stats.UserMessages)
-	fmt.Printf("Assistant responses: %d\n", stats.AssistantMessages)
-	fmt.Printf("Total characters: %d\n", stats.TotalCharacters)
+	fmt.Printf("Mode: %s\n", a.providerName)
+	fmt.Printf("Online: %v\n", a.isOnline)
+	fmt.Printf("Current directory: %s\n", a.currentDir)
+	fmt.Printf("Messages in conversation: %d\n", a.chatSession.GetMessagesCount())
+	
+	stats := a.historyMgr.Stats()
+	fmt.Printf("Total history entries: %v\n", stats["total_entries"])
+	fmt.Printf("Total sessions: %v\n", stats["total_sessions"])
 	fmt.Println()
+
+	return nil
+}
+
+// cmdGit handles git commands.
+func (a *App) cmdGit(args []string) error {
+	if !a.cfg.EnableGitIntegration {
+		return fmt.Errorf("git integration is disabled in config")
+	}
+
+	if !git.IsGitRepo(a.currentDir) {
+		return fmt.Errorf("not a git repository")
+	}
+
+	subcmd := ""
+	if len(args) > 0 {
+		subcmd = args[0]
+	}
+
+	switch subcmd {
+	case "status", "st", "":
+		status, err := git.GetStatus(a.currentDir)
+		if err != nil {
+			return fmt.Errorf("failed to get status: %w", err)
+		}
+		fmt.Println(git.FormatStatus(status))
+
+	case "log", "l":
+		count := 5
+		if len(args) > 1 {
+			fmt.Sscanf(args[1], "%d", &count)
+		}
+		commits, err := git.GetRecentCommits(a.currentDir, count)
+		if err != nil {
+			return fmt.Errorf("failed to get commits: %w", err)
+		}
+		fmt.Printf("%sRecent Commits:%s\n\n", ColorBold, ColorReset)
+		for _, c := range commits {
+			fmt.Printf("%s[%s]%s %s - %s\n", 
+				ColorCyan, c.Hash[:7], ColorReset, c.Author, c.Message)
+		}
+		fmt.Println()
+
+	case "diff", "d":
+		staged := len(args) > 1 && args[1] == "--staged"
+		diff, err := git.GetDiff(a.currentDir, staged)
+		if err != nil {
+			return fmt.Errorf("failed to get diff: %w", err)
+		}
+		if diff == "" {
+			fmt.Println("No changes.")
+		} else {
+			fmt.Println(diff)
+		}
+
+	default:
+		return fmt.Errorf("unknown git subcommand: %s (use: status, log, diff)", subcmd)
+	}
+
+	return nil
+}
+
+// cmdTools lists available tools.
+func (a *App) cmdTools(args []string) error {
+	toolsText := `
+%s╔══════════════════════════════════════════════════════════╗
+║                  Available Tools                          ║
+╚══════════════════════════════════════════════════════════╝%s
+
+%s🤖 AI-Powered Tools:%s
+  • Chat/REPL        - Interactive coding assistant
+  • Code Explanation - Understand complex code
+  • Code Refactoring - Improve code quality
+  • Code Generation  - Generate Go code from descriptions
+  • Code Review      - Find issues and improvements
+  • Debug Helper     - Troubleshoot problems
+  • Test Generation  - Create unit tests
+
+%s📁 File Tools:%s
+  • Read files       - View file contents
+  • Write files      - Create/edit files
+  • Code scanning    - Analyze codebase structure
+
+%s🧩 Snippet Library:%s
+  • main             - Basic main function template
+  • http_server      - HTTP server setup
+  • cli_app          - CLI application structure
+  • struct_json      - Struct with JSON tags
+  • interface_repo   - Repository pattern
+  • test_function    - Table-driven tests
+  • goroutine_worker - Worker pool pattern
+  • middleware_chain - HTTP middleware
+  • error_handling   - Custom error types
+  • config_loader    - Configuration loading
+  • sql_database     - Database connection
+
+%s🔧 Utility Tools:%s
+  • History tracking - Command history management
+  • Session export   - Export conversations
+  • Git integration  - Version control commands
+
+`
+	fmt.Printf(toolsText,
+		ColorBold, ColorReset,
+		ColorBold, ColorReset,
+		ColorBold, ColorReset,
+		ColorBold, ColorReset,
+		ColorBold, ColorReset)
 
 	return nil
 }
@@ -640,10 +900,8 @@ func (a *App) cmdStatus(args []string) error {
 // cleanup performs cleanup before exit.
 func (a *App) cleanup() {
 	a.historyMgr.EndSession()
-	if a.cfg.AutoSaveSession {
-		if err := a.historyMgr.Save(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Failed to save history: %v\n", err)
-		}
+	if err := a.historyMgr.Save(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to save history: %v\n", err)
 	}
 }
 

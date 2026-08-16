@@ -1,4 +1,3 @@
-// Package snippets provides code snippet templates for Go development.
 package snippets
 
 import (
@@ -9,34 +8,34 @@ import (
 // Snippet represents a code snippet template.
 type Snippet struct {
 	Name        string
-	Description string
 	Category    string
+	Description string
 	Template    string
 	Variables   []string
 }
 
-// Registry holds all available snippets.
+// Registry manages code snippets.
 type Registry struct {
-	snippets map[string]Snippet
+	snippets map[string]*Snippet
 }
 
-// NewRegistry creates a new snippet registry with built-in templates.
+// NewRegistry creates a new snippet registry with built-in snippets.
 func NewRegistry() *Registry {
 	r := &Registry{
-		snippets: make(map[string]Snippet),
+		snippets: make(map[string]*Snippet),
 	}
-	r.loadBuiltInSnippets()
+	r.registerBuiltInSnippets()
 	return r
 }
 
-// loadBuiltInSnippets loads the built-in Go snippet templates.
-func (r *Registry) loadBuiltInSnippets() {
-	builtIns := []Snippet{
-		{
-			Name:        "main",
-			Description: "Standard main function with error handling",
-			Category:    "boilerplate",
-			Template: `package main
+// registerBuiltInSnippets registers all built-in Go snippets.
+func (r *Registry) registerBuiltInSnippets() {
+	// Main function template
+	r.Register(&Snippet{
+		Name:        "main",
+		Category:    "basic",
+		Description: "Basic main function with error handling",
+		Template: `package main
 
 import (
 	"fmt"
@@ -45,7 +44,7 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -54,67 +53,50 @@ func run() error {
 	// Your code here
 	return nil
 }`,
-			Variables: []string{},
-		},
-		{
-			Name:        "http_server",
-			Description: "Basic HTTP server with graceful shutdown",
-			Category:    "web",
-			Template: `package main
+	})
+
+	// HTTP Server template
+	r.Register(&Snippet{
+		Name:        "http_server",
+		Category:    "web",
+		Description: "Basic HTTP server with routing",
+		Template: `package main
 
 import (
-	"context"
-	"fmt"
+	"encoding/json"
 	"log"
 	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
 )
 
 func main() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", handleRoot)
+	http.HandleFunc("/", handleHome)
+	http.HandleFunc("/api/", handleAPI)
 	
-	server := &http.Server{
-		Addr:    ":8080",
-		Handler: mux,
+	log.Println("Server starting on :8080")
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		log.Fatal(err)
 	}
-	
-	go func() {
-		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			log.Fatalf("server error: %v", err)
-		}
-	}()
-	
-	fmt.Println("Server starting on :8080")
-	
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	
-	if err := server.Shutdown(ctx); err != nil {
-		log.Fatalf("shutdown error: %v", err)
-	}
-	
-	fmt.Println("Server stopped")
 }
 
-func handleRoot(w http.ResponseWriter, r *http.Request) {
+func handleHome(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintln(w, "Hello, World!")
+	w.Write([]byte("Welcome!"))
+}
+
+func handleAPI(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "ok",
+	})
 }`,
-			Variables: []string{"port"},
-		},
-		{
-			Name:        "cli_app",
-			Description: "Basic CLI application structure",
-			Category:    "cli",
-			Template: `package main
+	})
+
+	// CLI App template
+	r.Register(&Snippet{
+		Name:        "cli_app",
+		Category:    "cli",
+		Description: "Basic CLI application structure",
+		Template: `package main
 
 import (
 	"flag"
@@ -122,186 +104,194 @@ import (
 	"os"
 )
 
-type Config struct {
-	Verbose bool
-	Output  string
+var (
+	version = "1.0.0"
+	verbose bool
+	output  string
+)
+
+func init() {
+	flag.BoolVar(&verbose, "v", false, "verbose output")
+	flag.StringVar(&output, "o", "", "output file")
+	flag.BoolVar(&verbose, "verbose", false, "verbose output")
+	flag.StringVar(&output, "output", "", "output file")
 }
 
 func main() {
-	cfg := parseFlags()
+	flag.Parse()
 	
-	if err := run(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	if verbose {
+		fmt.Printf("Starting with verbose mode, output: %s\n", output)
+	}
+	
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func parseFlags() *Config {
-	cfg := &Config{}
-	flag.BoolVar(&cfg.Verbose, "v", false, "verbose output")
-	flag.StringVar(&cfg.Output, "o", "", "output file")
-	flag.Parse()
-	return cfg
-}
-
-func run(cfg *Config) error {
-	if cfg.Verbose {
-		fmt.Println("Running in verbose mode")
+func run() error {
+	args := flag.Args()
+	if len(args) == 0 {
+		return fmt.Errorf("no input provided")
 	}
 	
-	// Your code here
+	// Process args
+	for _, arg := range args {
+		if verbose {
+			fmt.Printf("Processing: %s\n", arg)
+		}
+	}
+	
 	return nil
 }`,
-			Variables: []string{},
-		},
-		{
-			Name:        "struct_json",
-			Description: "Struct with JSON tags and methods",
-			Category:    "types",
-			Template: `type ${NAME} struct {
-	ID   int    ` + "`" + `json:"id"` + "`" + `
-	Name string ` + "`" + `json:"name"` + "`" + `
-}
+	})
 
-func New${NAME}(id int, name string) *${NAME} {
-	return &${NAME}{
-		ID:   id,
-		Name: name,
-	}
-}
-
-func (n *${NAME}) String() string {
-	return fmt.Sprintf("${NAME}{ID: %d, Name: %s}", n.ID, n.Name)
+	// Struct with JSON tags
+	r.Register(&Snippet{
+		Name:        "struct_json",
+		Category:    "types",
+		Description: "Struct with JSON marshaling",
+		Template: `type {{.Name}} struct {
+	ID        int64  ` + "`json:\"id\"`" + `
+	Name      string ` + "`json:\"name\"`" + `
+	Email     string ` + "`json:\"email,omitempty\"`" + `
+	CreatedAt int64  ` + "`json:\"created_at\"`" + `
+	UpdatedAt int64  ` + "`json:\"updated_at\"`" + `
 }`,
-			Variables: []string{"NAME"},
-		},
-		{
-			Name:        "interface_repo",
-			Description: "Repository interface pattern",
-			Category:    "patterns",
-			Template: `// ${ENTITY}Repository defines the interface for ${ENTITY} data access.
-type ${ENTITY}Repository interface {
-	GetByID(ctx context.Context, id int) (*${ENTITY}, error)
-	List(ctx context.Context, opts ListOptions) ([]*${ENTITY}, error)
-	Create(ctx context.Context, e *${ENTITY}) error
-	Update(ctx context.Context, e *${ENTITY}) error
-	Delete(ctx context.Context, id int) error
+		Variables: []string{"Name"},
+	})
+
+	// Interface with repository pattern
+	r.Register(&Snippet{
+		Name:        "interface_repo",
+		Category:    "patterns",
+		Description: "Repository interface pattern",
+		Template: `// {{.Entity}}Repository defines the interface for {{.Entity}} data access.
+type {{.Entity}}Repository interface {
+	GetByID(ctx context.Context, id int64) (*{{.Entity}}, error)
+	GetAll(ctx context.Context) ([]*{{.Entity}}, error)
+	Create(ctx context.Context, e *{{.Entity}}) error
+	Update(ctx context.Context, e *{{.Entity}}) error
+	Delete(ctx context.Context, id int64) error
 }
 
-// ${ENTITY}Service provides business logic for ${ENTITY}.
-type ${ENTITY}Service struct {
-	repo ${ENTITY}Repository
+// {{.Entity}}Service provides business logic for {{.Entity}}.
+type {{.Entity}}Service struct {
+	repo {{.Entity}}Repository
 }
 
-func New${ENTITY}Service(repo ${ENTITY}Repository) *${ENTITY}Service {
-	return &${ENTITY}Service{repo: repo}
+func New{{.Entity}}Service(repo {{.Entity}}Repository) *{{.Entity}}Service {
+	return &{{.Entity}}Service{repo: repo}
 }`,
-			Variables: []string{"ENTITY"},
-		},
-		{
-			Name:        "test_function",
-			Description: "Standard test function template",
-			Category:    "testing",
-			Template: `func Test${NAME}(t *testing.T) {
+		Variables: []string{"Entity"},
+	})
+
+	// Test function template
+	r.Register(&Snippet{
+		Name:        "test_function",
+		Category:    "testing",
+		Description: "Table-driven test template",
+		Template: `func Test{{.FunctionName}}(t *testing.T) {
 	tests := []struct {
 		name    string
-		input   string
-		want    string
+		input   {{.InputType}}
+		want    {{.OutputType}}
 		wantErr bool
 	}{
 		{
 			name:    "success case",
-			input:   "valid input",
-			want:    "expected output",
+			input:   /* setup */,
+			want:    /* expected */,
 			wantErr: false,
 		},
 		{
 			name:    "error case",
-			input:   "invalid input",
-			want:    "",
+			input:   /* setup */,
+			want:    /* expected */,
 			wantErr: true,
 		},
 	}
 	
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := FunctionUnderTest(tt.input)
+			got, err := {{.FunctionName}}(tt.input)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("FunctionUnderTest() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("{{.FunctionName}}() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if got != tt.want {
-				t.Errorf("FunctionUnderTest() = %v, want %v", got, tt.want)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("{{.FunctionName}}() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }`,
-			Variables: []string{"NAME"},
-		},
-		{
-			Name:        "goroutine_worker",
-			Description: "Worker pool pattern with goroutines",
-			Category:    "concurrency",
-			Template: `type Job struct {
+		Variables: []string{"FunctionName", "InputType", "OutputType"},
+	})
+
+	// Goroutine worker pool
+	r.Register(&Snippet{
+		Name:        "goroutine_worker",
+		Category:    "concurrency",
+		Description: "Worker pool with goroutines",
+		Template: `type Job struct {
 	ID   int
 	Data interface{}
 }
 
 type WorkerPool struct {
 	jobs    chan Job
-	results chan Result
-	numWorkers int
-}
-
-type Result struct {
-	JobID int
-	Output interface{}
-	Error  error
+	results chan error
+	wg      sync.WaitGroup
 }
 
 func NewWorkerPool(numWorkers int) *WorkerPool {
-	return &WorkerPool{
-		jobs:       make(chan Job, 100),
-		results:    make(chan Result, 100),
-		numWorkers: numWorkers,
+	wp := &WorkerPool{
+		jobs:    make(chan Job, 100),
+		results: make(chan error, 100),
 	}
+	
+	for i := 0; i < numWorkers; i++ {
+		wp.wg.Add(1)
+		go wp.worker(i)
+	}
+	
+	return wp
 }
 
-func (wp *WorkerPool) Start(ctx context.Context) {
-	for i := 0; i < wp.numWorkers; i++ {
-		go wp.worker(ctx, i)
-	}
-}
-
-func (wp *WorkerPool) worker(ctx context.Context, id int) {
+func (wp *WorkerPool) worker(id int) {
+	defer wp.wg.Done()
+	
 	for job := range wp.jobs {
-		result := processJob(ctx, job)
-		wp.results <- result
+		if err := wp.process(job); err != nil {
+			wp.results <- fmt.Errorf("worker %d: job %d failed: %w", id, job.ID, err)
+		}
 	}
 }
 
-func processJob(ctx context.Context, job Job) Result {
+func (wp *WorkerPool) process(job Job) error {
 	// Process the job
-	return Result{JobID: job.ID, Output: nil, Error: nil}
+	return nil
 }
 
 func (wp *WorkerPool) Submit(job Job) {
 	wp.jobs <- job
 }
 
-func (wp *WorkerPool) Results() <-chan Result {
-	return wp.results
+func (wp *WorkerPool) Close() {
+	close(wp.jobs)
+	wp.wg.Wait()
+	close(wp.results)
 }`,
-			Variables: []string{},
-		},
-		{
-			Name:        "middleware_chain",
-			Description: "HTTP middleware chain",
-			Category:    "web",
-			Template: `// Middleware is a function that wraps an http.Handler.
-type Middleware func(http.Handler) http.Handler
+	})
 
-// Chain applies middlewares to a handler in order.
+	// Middleware chain
+	r.Register(&Snippet{
+		Name:        "middleware_chain",
+		Category:    "web",
+		Description: "HTTP middleware chain",
+		Template: `type Middleware func(http.Handler) http.Handler
+
 func Chain(h http.Handler, middlewares ...Middleware) http.Handler {
 	for i := len(middlewares) - 1; i >= 0; i-- {
 		h = middlewares[i](h)
@@ -309,7 +299,6 @@ func Chain(h http.Handler, middlewares ...Middleware) http.Handler {
 	return h
 }
 
-// LoggingMiddleware logs request information.
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -318,65 +307,67 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// RecoveryMiddleware recovers from panics.
-func RecoveryMiddleware(next http.Handler) http.Handler {
+func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if err := recover(); err != nil {
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			}
-		}()
+		token := r.Header.Get("Authorization")
+		if token == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }`,
-			Variables: []string{},
-		},
-		{
-			Name:        "error_handling",
-			Description: "Custom error types and wrapping",
-			Category:    "errors",
-			Template: `// Error types
-var (
-	ErrNotFound = errors.New("not found")
-	ErrInvalid  = errors.New("invalid input")
-)
+	})
 
-// AppError represents an application error.
-type AppError struct {
+	// Error handling wrapper
+	r.Register(&Snippet{
+		Name:        "error_handling",
+		Category:    "patterns",
+		Description: "Custom error types with wrapping",
+		Template: `type Error struct {
 	Code    string
 	Message string
 	Err     error
 }
 
-func (e *AppError) Error() string {
+func (e *Error) Error() string {
 	if e.Err != nil {
 		return fmt.Sprintf("%s: %s: %v", e.Code, e.Message, e.Err)
 	}
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
-func (e *AppError) Unwrap() error {
+func (e *Error) Unwrap() error {
 	return e.Err
 }
 
-// NewAppError creates a new application error.
-func NewAppError(code, message string, err error) *AppError {
-	return &AppError{
-		Code:    code,
-		Message: message,
-		Err:     err,
+func NewError(code, message string) *Error {
+	return &Error{Code: code, Message: message}
+}
+
+func WrapError(err error, code, message string) *Error {
+	return &Error{Code: code, Message: message, Err: err}
+}
+
+func IsNotFound(err error) bool {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Code == "NOT_FOUND"
 	}
+	return false
 }`,
-			Variables: []string{},
-		},
-		{
-			Name:        "config_loader",
-			Description: "Configuration loading from env and file",
-			Category:    "utility",
-			Template: `type Config struct {
-	ServerPort int    ` + "`" + `env:"SERVER_PORT" envDefault:"8080"` + "`" + `
-	DatabaseURL string ` + "`" + `env:"DATABASE_URL" required:"true"` + "`" + `
-	LogLevel   string ` + "`" + `env:"LOG_LEVEL" envDefault:"info"` + "`" + `
+	})
+
+	// Config loader
+	r.Register(&Snippet{
+		Name:        "config_loader",
+		Category:    "utility",
+		Description: "Configuration loading from env and file",
+		Template: `type Config struct {
+	ServerAddr   string ` + "`env:\"SERVER_ADDR\" envDefault:\":8080\"`" + `
+	DatabaseURL  string ` + "`env:\"DATABASE_URL,required\"`" + `
+	LogLevel     string ` + "`env:\"LOG_LEVEL\" envDefault:\"info\"`" + `
+	Environment  string ` + "`env:\"ENV\" envDefault:\"development\"`" + `
 }
 
 func LoadConfig() (*Config, error) {
@@ -387,9 +378,9 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse env: %w", err)
 	}
 	
-	// Optionally load from file
-	if configFile := os.Getenv("CONFIG_FILE"); configFile != "" {
-		if err := loadFromFile(configFile, cfg); err != nil {
+	// Override from file if exists
+	if cfgPath := os.Getenv("CONFIG_FILE"); cfgPath != "" {
+		if err := loadFromFile(cfg, cfgPath); err != nil {
 			return nil, fmt.Errorf("failed to load config file: %w", err)
 		}
 	}
@@ -397,36 +388,100 @@ func LoadConfig() (*Config, error) {
 	return cfg, nil
 }
 
-func loadFromFile(path string, cfg *Config) error {
+func loadFromFile(cfg *Config, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 	return json.Unmarshal(data, cfg)
 }`,
-			Variables: []string{},
-		},
-	}
+	})
 
-	for _, s := range builtIns {
-		r.snippets[s.Name] = s
+	// SQL database connection
+	r.Register(&Snippet{
+		Name:        "sql_database",
+		Category:    "database",
+		Description: "SQL database connection with migration",
+		Template: `package database
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"time"
+	
+	_ "github.com/lib/pq"
+)
+
+type DB struct {
+	*sql.DB
+}
+
+func NewDB(dsn string) (*DB, error) {
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
+	
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
+	
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+	
+	return &DB{db}, nil
+}
+
+func (db *DB) Migrate(ctx context.Context) error {
+	query := ` + "`" + `
+	CREATE TABLE IF NOT EXISTS users (
+		id SERIAL PRIMARY KEY,
+		email VARCHAR(255) UNIQUE NOT NULL,
+		created_at TIMESTAMP DEFAULT NOW()
+	);
+	` + "`" + `
+	
+	_, err := db.ExecContext(ctx, query)
+	return err
+}`,
+	})
+}
+
+// Register adds a snippet to the registry.
+func (r *Registry) Register(snippet *Snippet) {
+	r.snippets[snippet.Name] = snippet
 }
 
 // Get retrieves a snippet by name.
-func (r *Registry) Get(name string) (Snippet, bool) {
+func (r *Registry) Get(name string) (*Snippet, error) {
 	snippet, ok := r.snippets[name]
-	return snippet, ok
+	if !ok {
+		return nil, fmt.Errorf("snippet not found: %s", name)
+	}
+	return snippet, nil
 }
 
-// List returns all snippet names, optionally filtered by category.
-func (r *Registry) List(category string) []Snippet {
-	var result []Snippet
+// List returns all snippets, optionally filtered by category.
+func (r *Registry) List(category string) []*Snippet {
+	var result []*Snippet
+	
 	for _, s := range r.snippets {
 		if category == "" || s.Category == category {
 			result = append(result, s)
 		}
 	}
+	
+	// Sort by name
+	for i := 0; i < len(result)-1; i++ {
+		for j := i + 1; j < len(result); j++ {
+			if result[i].Name > result[j].Name {
+				result[i], result[j] = result[j], result[i]
+			}
+		}
+	}
+	
 	return result
 }
 
@@ -436,29 +491,29 @@ func (r *Registry) Categories() []string {
 	for _, s := range r.snippets {
 		cats[s.Category] = true
 	}
+	
 	result := make([]string, 0, len(cats))
 	for c := range cats {
 		result = append(result, c)
 	}
+	
 	return result
 }
 
-// Render renders a snippet template with variable substitutions.
+// Render renders a snippet with variable substitutions.
 func (r *Registry) Render(name string, vars map[string]string) (string, error) {
-	snippet, ok := r.Get(name)
-	if !ok {
-		return "", fmt.Errorf("snippet not found: %s", name)
+	snippet, err := r.Get(name)
+	if err != nil {
+		return "", err
 	}
-
-	template := snippet.Template
+	
+	result := snippet.Template
+	
+	// Simple variable substitution {{.VarName}}
 	for key, value := range vars {
-		template = strings.ReplaceAll(template, "${"+key+"}", value)
+		placeholder := "{{." + key + "}}"
+		result = strings.ReplaceAll(result, placeholder, value)
 	}
-
-	return template, nil
-}
-
-// Add adds a custom snippet to the registry.
-func (r *Registry) Add(snippet Snippet) {
-	r.snippets[snippet.Name] = snippet
+	
+	return result, nil
 }
