@@ -13,14 +13,14 @@
 package secrets
 
 import (
-	_ "embed"
+	"embed"
 	"encoding/hex"
 	"strings"
 	"sync"
 )
 
-//go:embed blob.bin
-var rawBlob string
+//go:embed *.bin
+var blobFS embed.FS
 
 // xorMask decodes the embedded blobs below. It exists only in code, not in
 // any config file or environment variable.
@@ -38,8 +38,30 @@ func decode(blob string) string {
 	return string(out)
 }
 
+// blobLines returns the non-empty encoded entries across every embedded .bin
+// file, so the committed placeholder alone yields no credentials while a
+// dropped-in blob.bin simply appends its real entries.
 func blobLines() []string {
-	return strings.Split(strings.ReplaceAll(rawBlob, "\r\n", "\n"), "\n")
+	entries, err := blobFS.ReadDir(".")
+	if err != nil {
+		return nil
+	}
+	var kept []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".bin") {
+			continue
+		}
+		data, readErr := blobFS.ReadFile(entry.Name())
+		if readErr != nil {
+			continue
+		}
+		for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+			if strings.TrimSpace(line) != "" {
+				kept = append(kept, line)
+			}
+		}
+	}
+	return kept
 }
 
 func line(i int) string {
