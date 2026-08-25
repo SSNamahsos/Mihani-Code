@@ -1,0 +1,12 @@
+*.exe
+*.out
+dist/
+.mihani/
+
+# Real credentials — never commit
+internal/secrets/blob.bin
+
+# Raw key notes and scratch output
+default ai's.txt
+tui-out.txt
+tui-err.txt

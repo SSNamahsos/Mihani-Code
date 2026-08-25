@@ -1,0 +1,704 @@
+package agent
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"runtime"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/fazpadstudio/mihani-code/internal/config"
+	"github.com/fazpadstudio/mihani-code/internal/gitx"
+	"github.com/fazpadstudio/mihani-code/internal/mcp"
+	"github.com/fazpadstudio/mihani-code/internal/pricing"
+	"github.com/fazpadstudio/mihani-code/internal/secrets"
+	"github.com/fazpadstudio/mihani-code/internal/skills"
+	"github.com/fazpadstudio/mihani-code/internal/tools"
+)
+
+type Event struct {
+	Kind       string
+	Text       string
+	Tool       string
+	Input      map[string]any
+	Tokens     int
+	MaxTokens  int
+	InputTok   int     // input tokens billed for the latest request
+	OutputTok  int     // output tokens billed for the latest request
+	CostUSD    float64 // USD billed for the latest request (delta, not cumulative)
+	ToolCallID string
+	ToolResult string
+	Iteration  int
+	Done       bool
+	Approval   chan bool
+}
+
+type Agent struct {
+	Cfg           config.Config
+	Root          string
+	Client        *http.Client
+	MaxIterations int
+	history       []map[string]any
+	mcp           map[string]*mcp.Client
+	mcpTools      []map[string]any
+	tokens        int
+}
+
+func (a *Agent) Reset()                           { a.history = nil; a.tokens = 0 }
+func (a *Agent) History() []map[string]any        { return a.history }
+func (a *Agent) Restore(history []map[string]any) { a.history = history }
+func (a *Agent) Tokens() int                      { return a.tokens }
+
+func (a *Agent) iterations() int {
+	if a.MaxIterations > 0 {
+		return a.MaxIterations
+	}
+	return 40
+}
+
+// Send runs one full agent turn. mode is one of build, plan, research, ask.
+func (a *Agent) Send(ctx context.Context, prompt, mode string, approve func(string, map[string]any) bool, emit func(Event)) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	pricing.SetOverrides(a.Cfg.Pricing)
+	a.tokens += estimateTokens(prompt)
+	if err := a.ensureMCP(ctx, emit); err != nil {
+		emit(Event{Kind: "activity", Text: "MCP unavailable: " + err.Error()})
+	}
+	p := a.Cfg.Providers[a.Cfg.CurrentProvider]
+	if p.Type == "anthropic" {
+		return a.sendAnthropic(ctx, p, prompt, mode, approve, emit)
+	}
+	return a.sendOpenAI(ctx, p, prompt, mode, approve, emit)
+}
+
+func (a *Agent) sendOpenAI(ctx context.Context, p config.Provider, prompt, mode string, approve func(string, map[string]any) bool, emit func(Event)) error {
+	system := map[string]any{"role": "system", "content": SystemPrompt(mode, a.Root)}
+	if len(a.history) == 0 || a.history[0]["role"] != "system" {
+		a.history = append([]map[string]any{system}, a.history...)
+	} else {
+		a.history[0] = system
+	}
+	a.history = append(a.history, map[string]any{"role": "user", "content": prompt})
+	for iteration := 1; iteration <= a.iterations(); iteration++ {
+		emit(Event{Kind: "activity", Text: "thinking", Iteration: iteration})
+		a.compactHistory()
+		assistant, calls, apiIn, apiOut, responseChars, err := a.openAIRequest(ctx, p, emit)
+		if err != nil {
+			return err
+		}
+		a.trackUsage(apiIn, apiOut, responseChars, emit)
+		a.history = append(a.history, assistant)
+		if len(calls) == 0 {
+			emit(Event{Kind: "done", Done: true})
+			return nil
+		}
+		for _, call := range calls {
+			result, err := a.runTool(ctx, call.Name, call.Input, call.ID, approve, emit)
+			if err != nil {
+				return err
+			}
+			a.history = append(a.history, map[string]any{"role": "tool", "tool_call_id": call.ID, "content": clip(result, historyToolLimit)})
+		}
+	}
+	return fmt.Errorf("agent stopped after %d tool iterations", a.iterations())
+}
+
+type toolCall struct {
+	ID, Name string
+	Input    map[string]any
+}
+
+func (a *Agent) openAIRequest(ctx context.Context, p config.Provider, emit func(Event)) (map[string]any, []toolCall, int, int, int, error) {
+	body := map[string]any{
+		"model":          a.Cfg.CurrentModel,
+		"max_tokens":     a.Cfg.MaxTokens,
+		"stream":         true,
+		"messages":       a.history,
+		"tools":          a.openAITools(),
+		"stream_options": map[string]any{"include_usage": true},
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return nil, nil, 0, 0, 0, err
+	}
+	base := strings.TrimRight(p.BaseURL, "/")
+	if base == "" {
+		base = "https://api.openai.com/v1"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/chat/completions", bytes.NewReader(b))
+	if err != nil {
+		return nil, nil, 0, 0, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if key := a.Cfg.Key(a.Cfg.CurrentProvider); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	resp, err := a.client().Do(req)
+	if err != nil {
+		return nil, nil, 0, 0, 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, nil, 0, 0, 0, providerError(resp)
+	}
+	var content strings.Builder
+	calls := map[int]*toolCallState{}
+	promptTokens, completionTokens, totalTokens := 0, 0, 0
+	responseChars := 0
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 4096), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			continue
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Role      string `json:"role"`
+					Content   string `json:"content"`
+					ToolCalls []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+			Usage struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal([]byte(data), &chunk) != nil {
+			continue
+		}
+		if chunk.Usage.TotalTokens > 0 || chunk.Usage.PromptTokens > 0 {
+			promptTokens = chunk.Usage.PromptTokens
+			completionTokens = chunk.Usage.CompletionTokens
+			totalTokens = chunk.Usage.TotalTokens
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		delta := chunk.Choices[0].Delta
+		if delta.Content != "" {
+			content.WriteString(delta.Content)
+			responseChars += len(delta.Content)
+			emit(Event{Kind: "text", Text: delta.Content})
+		}
+		for _, deltaCall := range delta.ToolCalls {
+			state := calls[deltaCall.Index]
+			if state == nil {
+				state = &toolCallState{}
+				calls[deltaCall.Index] = state
+			}
+			if deltaCall.ID != "" {
+				state.ID = deltaCall.ID
+			}
+			if deltaCall.Function.Name != "" && state.Name == "" {
+				state.Name = deltaCall.Function.Name
+			}
+			state.Arguments += deltaCall.Function.Arguments
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, nil, 0, 0, 0, err
+	}
+	assistant := map[string]any{"role": "assistant", "content": nil}
+	if content.Len() > 0 {
+		assistant["content"] = content.String()
+	}
+	// Preserve tool call order: Go maps are unordered, so sort by index.
+	indexes := make([]int, 0, len(calls))
+	for index := range calls {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	var result []toolCall
+	var rawCalls []map[string]any
+	for _, index := range indexes {
+		state := calls[index]
+		input := map[string]any{}
+		if json.Unmarshal([]byte(state.Arguments), &input) != nil {
+			input = map[string]any{"arguments": state.Arguments}
+		}
+		id := state.ID
+		if id == "" {
+			id = fmt.Sprintf("call_%d_%d", index, time.Now().UnixNano())
+		}
+		result = append(result, toolCall{ID: id, Name: state.Name, Input: input})
+		rawCalls = append(rawCalls, map[string]any{"id": id, "type": "function", "function": map[string]any{"name": state.Name, "arguments": state.Arguments}})
+	}
+	if len(rawCalls) > 0 {
+		assistant["tool_calls"] = rawCalls
+	}
+	if totalTokens == 0 {
+		totalTokens = promptTokens + completionTokens
+	}
+	return assistant, result, promptTokens, completionTokens, responseChars, nil
+}
+
+type toolCallState struct{ ID, Name, Arguments string }
+
+func (a *Agent) sendAnthropic(ctx context.Context, p config.Provider, prompt, mode string, approve func(string, map[string]any) bool, emit func(Event)) error {
+	if len(a.history) == 0 {
+		a.history = []map[string]any{}
+	}
+	a.history = append(a.history, map[string]any{"role": "user", "content": prompt})
+	for iteration := 1; iteration <= a.iterations(); iteration++ {
+		emit(Event{Kind: "activity", Text: "thinking", Iteration: iteration})
+		a.compactHistory()
+		message, calls, apiIn, apiOut, responseChars, err := a.anthropicRequest(ctx, p, mode, emit)
+		if err != nil {
+			return err
+		}
+		a.trackUsage(apiIn, apiOut, responseChars, emit)
+		a.history = append(a.history, message)
+		if len(calls) == 0 {
+			emit(Event{Kind: "done", Done: true})
+			return nil
+		}
+		results := make([]map[string]any, 0, len(calls))
+		for _, call := range calls {
+			result, runErr := a.runTool(ctx, call.Name, call.Input, call.ID, approve, emit)
+			if runErr != nil {
+				return runErr
+			}
+			results = append(results, map[string]any{"type": "tool_result", "tool_use_id": call.ID, "content": clip(result, historyToolLimit)})
+		}
+		a.history = append(a.history, map[string]any{"role": "user", "content": results})
+	}
+	return fmt.Errorf("agent stopped after %d tool iterations", a.iterations())
+}
+
+func (a *Agent) anthropicRequest(ctx context.Context, p config.Provider, mode string, emit func(Event)) (map[string]any, []toolCall, int, int, int, error) {
+	body := map[string]any{
+		"model":      a.Cfg.CurrentModel,
+		"max_tokens": a.Cfg.MaxTokens,
+		"stream":     true,
+		"system":     SystemPrompt(mode, a.Root),
+		"messages":   a.history,
+		"tools":      a.anthropicTools(),
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return nil, nil, 0, 0, 0, err
+	}
+	base := strings.TrimRight(p.BaseURL, "/")
+	if base == "" {
+		base = "https://api.anthropic.com/v1"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/messages", bytes.NewReader(b))
+	if err != nil {
+		return nil, nil, 0, 0, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", a.Cfg.Key(a.Cfg.CurrentProvider))
+	req.Header.Set("anthropic-version", "2023-06-01")
+	resp, err := a.client().Do(req)
+	if err != nil {
+		return nil, nil, 0, 0, 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, nil, 0, 0, 0, providerError(resp)
+	}
+	var blocks []map[string]any
+	var text strings.Builder
+	var current *map[string]any
+	responseChars := 0
+	inputTokens, outputTokens := 0, 0
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 4096), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		var event struct {
+			Type         string         `json:"type"`
+			Index        int            `json:"index"`
+			ContentBlock map[string]any `json:"content_block"`
+			Delta        map[string]any `json:"delta"`
+			Message      struct {
+				Usage struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			} `json:"message"`
+			Usage struct {
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+			Error *struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal([]byte(data), &event) != nil {
+			continue
+		}
+		switch event.Type {
+		case "message_start":
+			inputTokens = event.Message.Usage.InputTokens
+		case "message_delta":
+			if event.Usage.OutputTokens > 0 {
+				outputTokens = event.Usage.OutputTokens
+			}
+		case "error":
+			if event.Error != nil {
+				return nil, nil, 0, 0, 0, fmt.Errorf("provider returned %s: %s", event.Error.Type, event.Error.Message)
+			}
+			return nil, nil, 0, 0, 0, fmt.Errorf("provider returned a stream error")
+		case "content_block_start":
+			block := event.ContentBlock
+			blocks = append(blocks, block)
+			current = &blocks[len(blocks)-1]
+		case "content_block_delta":
+			if event.Delta["type"] == "thinking_delta" {
+				emit(Event{Kind: "thinking", Text: fmt.Sprint(event.Delta["thinking"])})
+			}
+			if event.Delta["type"] == "text_delta" {
+				part := fmt.Sprint(event.Delta["text"])
+				text.WriteString(part)
+				responseChars += len(part)
+				emit(Event{Kind: "text", Text: part})
+			}
+			if event.Delta["type"] == "input_json_delta" && current != nil {
+				(*current)["input_json"] = fmt.Sprint((*current)["input_json"]) + fmt.Sprint(event.Delta["partial_json"])
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, nil, 0, 0, 0, err
+	}
+	// Drop unsigned thinking/redacted_thinking blocks: replaying them is a 400.
+	stored := make([]map[string]any, 0, len(blocks))
+	for _, block := range blocks {
+		switch block["type"] {
+		case "thinking", "redacted_thinking":
+			continue
+		}
+		delete(block, "input_json") // never persist partial-json scratch fields
+		stored = append(stored, block)
+	}
+	message := map[string]any{"role": "assistant", "content": stored}
+	if len(stored) == 0 {
+		message["content"] = text.String()
+	}
+	var calls []toolCall
+	for _, block := range blocks {
+		if block["type"] != "tool_use" {
+			continue
+		}
+		input := map[string]any{}
+		if raw, ok := block["input"].(map[string]any); ok {
+			input = raw
+		} else if raw := fmt.Sprint(block["input_json"]); raw != "<nil>" && raw != "" {
+			_ = json.Unmarshal([]byte(raw), &input)
+		}
+		calls = append(calls, toolCall{ID: fmt.Sprint(block["id"]), Name: fmt.Sprint(block["name"]), Input: input})
+	}
+	return message, calls, inputTokens, outputTokens, responseChars, nil
+}
+
+const historyToolLimit = 6000
+
+func (a *Agent) runTool(ctx context.Context, name string, input map[string]any, id string, approve func(string, map[string]any) bool, emit func(Event)) (string, error) {
+	emit(Event{Kind: "tool_start", Tool: name, Input: input, ToolCallID: id})
+	definition := tools.Lookup(name)
+	if preview := tools.Preview(name, input, a.Root); preview != "" {
+		emit(Event{Kind: "tool_preview", Tool: name, ToolResult: secrets.Redact(preview), ToolCallID: id})
+	}
+	if definition.Dangerous && !approve(name, input) {
+		result := "User declined to run this tool."
+		emit(Event{Kind: "tool_done", Tool: name, ToolResult: result, ToolCallID: id, Input: input})
+		return result, nil
+	}
+	var result string
+	if strings.HasPrefix(name, "mcp.") {
+		parts := strings.SplitN(strings.TrimPrefix(name, "mcp."), ".", 2)
+		if len(parts) != 2 {
+			result = "ERROR: invalid MCP tool name"
+		} else {
+			client := a.mcp[parts[0]]
+			if client == nil {
+				result = "ERROR: MCP server not connected"
+			} else {
+				data, err := client.Call(ctx, parts[1], input)
+				if err != nil {
+					result = "ERROR: " + err.Error()
+				} else {
+					result = string(data)
+				}
+			}
+		}
+	} else {
+		result = tools.Runner{Root: a.Root}.Run(ctx, name, input)
+	}
+	// Never let a secret reach the transcript, the model history, or logs.
+	result = secrets.Redact(result)
+	emit(Event{Kind: "tool_done", Tool: name, ToolResult: result, ToolCallID: id, Input: input})
+	return result, nil
+}
+
+// compactHistory trims the oldest stored tool outputs once the raw history
+// grows past its budget so long sessions do not overflow provider context.
+func (a *Agent) compactHistory() {
+	const budget = 240_000 // ~60k tokens of raw characters
+	total := 0
+	for _, m := range a.history {
+		total += contentSize(m["content"])
+	}
+	if total <= budget {
+		return
+	}
+	target := budget / 2
+	for i := 0; i < len(a.history) && total > target; i++ {
+		m := a.history[i]
+		role, _ := m["role"].(string)
+		if role == "tool" {
+			if c, ok := m["content"].(string); ok && len(c) > 400 {
+				total -= len(c) - 400
+				m["content"] = clip(c, 400) + "\n[older tool output truncated to save context]"
+			}
+			continue
+		}
+		if role == "user" {
+			for _, r := range toolResults(m["content"]) {
+				if fmt.Sprint(r["type"]) != "tool_result" {
+					continue
+				}
+				if c, ok := r["content"].(string); ok && len(c) > 400 {
+					total -= len(c) - 400
+					r["content"] = clip(c, 400) + "\n[older tool output truncated to save context]"
+				}
+			}
+		}
+	}
+}
+
+// toolResults normalizes Anthropic user content (either []map[string]any built
+// in-process or []any decoded from a restored session) into its item maps.
+func toolResults(v any) []map[string]any {
+	var out []map[string]any
+	switch c := v.(type) {
+	case []map[string]any:
+		out = c
+	case []any:
+		for _, item := range c {
+			if m, ok := item.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+	}
+	return out
+}
+
+func contentSize(v any) int {
+	switch c := v.(type) {
+	case string:
+		return len(c)
+	case []map[string]any:
+		n := 0
+		for _, item := range c {
+			n += contentSize(item["content"])
+		}
+		return n
+	case []any:
+		n := 0
+		for _, item := range c {
+			if m, ok := item.(map[string]any); ok {
+				n += contentSize(m["content"])
+			}
+		}
+		return n
+	}
+	return 0
+}
+
+// trackUsage meters context size and emits the billed delta for the latest
+// request. Authoritative provider totals win over character estimates.
+func (a *Agent) trackUsage(apiIn, apiOut, responseChars int, emit func(Event)) {
+	if apiIn+apiOut > 0 {
+		// The latest request's prompt+completion reflects current context size.
+		a.tokens = apiIn + apiOut
+	} else {
+		a.tokens += responseChars / 4
+	}
+	window := a.Cfg.ContextWindow
+	if window <= 0 {
+		window = 200_000
+	}
+	cost := pricing.Cost(a.Cfg.CurrentModel, apiIn, apiOut)
+	emit(Event{Kind: "usage", Tokens: a.tokens, MaxTokens: window, InputTok: apiIn, OutputTok: apiOut, CostUSD: cost})
+}
+
+func (a *Agent) client() *http.Client {
+	if a.Client != nil {
+		return a.Client
+	}
+	return http.DefaultClient
+}
+
+func (a *Agent) ensureMCP(ctx context.Context, emit func(Event)) error {
+	if a.mcp != nil {
+		return nil
+	}
+	a.mcp = map[string]*mcp.Client{}
+	for _, server := range mcp.Discover(a.Root) {
+		if server.Command == "" {
+			continue
+		}
+		emit(Event{Kind: "activity", Text: "connecting MCP " + server.Name})
+		client, err := mcp.Start(ctx, server)
+		if err != nil {
+			return fmt.Errorf("%s: %w", server.Name, err)
+		}
+		a.mcp[server.Name] = client
+		list, err := client.Tools()
+		if err != nil {
+			return fmt.Errorf("%s tools: %w", server.Name, err)
+		}
+		for _, item := range list {
+			a.mcpTools = append(a.mcpTools, map[string]any{"name": "mcp." + server.Name + "." + item.Name, "description": item.Description, "input_schema": item.InputSchema})
+		}
+	}
+	return nil
+}
+
+func (a *Agent) Close() {
+	for _, client := range a.mcp {
+		_ = client.Close()
+	}
+	a.mcp = nil
+}
+
+func providerError(resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &payload) == nil && payload.Error.Message != "" {
+		label := payload.Error.Type
+		if label != "" {
+			label += ": "
+		}
+		return fmt.Errorf("provider returned %s — %s%s", resp.Status, label, payload.Error.Message)
+	}
+	excerpt := strings.TrimSpace(string(body))
+	if excerpt == "" {
+		return fmt.Errorf("provider returned %s", resp.Status)
+	}
+	return fmt.Errorf("provider returned %s — %s", resp.Status, clip(excerpt, 300))
+}
+
+func estimateTokens(s string) int {
+	n := len(s) / 4
+	if n < 1 && s != "" {
+		return 1
+	}
+	return n
+}
+
+// clip truncates a string to at most n characters without cutting a rune in half.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return tools.Truncate(s, n) + "\n…[truncated]"
+}
+
+var modeGuidance = map[string]string{
+	"":         "",
+	"build":    "You may edit files and run commands to complete the task directly.",
+	"plan":     "Do NOT modify files or run mutating commands. Explore the codebase, then propose a concrete implementation plan.",
+	"research": "Do NOT modify files. Investigate code, docs, and options; report findings with references.",
+	"ask":      "Answer questions only. Do NOT modify files or run mutating commands.",
+}
+
+// SystemPrompt builds the per-turn system prompt including environment facts,
+// workspace context, and mode-specific guidance.
+func SystemPrompt(mode, root string) string {
+	var b strings.Builder
+	b.WriteString(basePrompt)
+	if guidance, ok := modeGuidance[strings.ToLower(mode)]; ok && guidance != "" {
+		b.WriteString("\n\nMode: " + strings.ToLower(mode) + ". " + guidance)
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		fmt.Fprintf(&b, "\n\n# Environment\n- Working directory: %s", cwd)
+	}
+	fmt.Fprintf(&b, "\n- Platform: %s/%s", runtime.GOOS, runtime.GOARCH)
+	fmt.Fprintf(&b, "\n- Date: %s", time.Now().Format("2006-01-02"))
+	if root != "" {
+		ctx2, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if branch, err := gitx.Branch(ctx2, root); err == nil && branch != "" {
+			fmt.Fprintf(&b, "\n- Git branch: %s", branch)
+		}
+	}
+	if root != "" {
+		b.WriteString(workspaceContext(root))
+	}
+	return b.String()
+}
+
+const basePrompt = "You are Mihani Code, a concise terminal coding agent. Inspect before editing. Explain changes briefly. Never claim a change was made unless a tool succeeded. Keep output practical. Prefer edit_file over rewriting whole files. Use markdown formatting in responses."
+
+func workspaceContext(root string) string {
+	var b strings.Builder
+	if found := skills.Discover(root); len(found) > 0 {
+		b.WriteString("\n\nProject skills available:")
+		for _, skill := range found {
+			b.WriteString("\n- " + skill.Name + ": " + skill.Description)
+		}
+	}
+	if servers := mcp.Discover(root); len(servers) > 0 {
+		b.WriteString("\n\nMCP servers configured:")
+		for _, server := range servers {
+			b.WriteString("\n- " + server.Name)
+		}
+	}
+	return b.String()
+}
+
+func (a *Agent) openAITools() []map[string]any {
+	result := []map[string]any{}
+	for _, tool := range tools.Registry {
+		result = append(result, map[string]any{"type": "function", "function": map[string]any{"name": tool.Name, "description": tool.Description, "parameters": tool.Schema}})
+	}
+	for _, tool := range a.mcpTools {
+		result = append(result, map[string]any{"type": "function", "function": map[string]any{"name": tool["name"], "description": tool["description"], "parameters": tool["input_schema"]}})
+	}
+	return result
+}
+
+func (a *Agent) anthropicTools() []map[string]any {
+	result := []map[string]any{}
+	for _, tool := range tools.Registry {
+		result = append(result, map[string]any{"name": tool.Name, "description": tool.Description, "input_schema": tool.Schema})
+	}
+	result = append(result, a.mcpTools...)
+	return result
+}
