@@ -9,8 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/fazpadstudio/mihani-code/internal/config"
-	"github.com/fazpadstudio/mihani-code/internal/providers"
+	"github.com/SSNamahsos/Mihani-Code/internal/config"
+	"github.com/SSNamahsos/Mihani-Code/internal/providers"
 )
 
 var connectPlaceholders = [3]string{

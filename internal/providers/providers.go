@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/fazpadstudio/mihani-code/internal/config"
+	"github.com/SSNamahsos/Mihani-Code/internal/config"
 )
 
 // DiscoverModels supports OpenAI-compatible /models endpoints and returns IDs only.

@@ -11,9 +11,9 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/fazpadstudio/mihani-code/internal/agent"
-	"github.com/fazpadstudio/mihani-code/internal/config"
-	"github.com/fazpadstudio/mihani-code/internal/usage"
+	"github.com/SSNamahsos/Mihani-Code/internal/agent"
+	"github.com/SSNamahsos/Mihani-Code/internal/config"
+	"github.com/SSNamahsos/Mihani-Code/internal/usage"
 )
 
 func newInput(value string) textarea.Model {

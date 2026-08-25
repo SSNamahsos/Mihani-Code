@@ -14,13 +14,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fazpadstudio/mihani-code/internal/config"
-	"github.com/fazpadstudio/mihani-code/internal/gitx"
-	"github.com/fazpadstudio/mihani-code/internal/mcp"
-	"github.com/fazpadstudio/mihani-code/internal/pricing"
-	"github.com/fazpadstudio/mihani-code/internal/secrets"
-	"github.com/fazpadstudio/mihani-code/internal/skills"
-	"github.com/fazpadstudio/mihani-code/internal/tools"
+	"github.com/SSNamahsos/Mihani-Code/internal/config"
+	"github.com/SSNamahsos/Mihani-Code/internal/gitx"
+	"github.com/SSNamahsos/Mihani-Code/internal/mcp"
+	"github.com/SSNamahsos/Mihani-Code/internal/pricing"
+	"github.com/SSNamahsos/Mihani-Code/internal/secrets"
+	"github.com/SSNamahsos/Mihani-Code/internal/skills"
+	"github.com/SSNamahsos/Mihani-Code/internal/tools"
 )
 
 type Event struct {

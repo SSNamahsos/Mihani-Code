@@ -13,8 +13,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/fazpadstudio/mihani-code/internal/config"
-	"github.com/fazpadstudio/mihani-code/internal/secrets"
+	"github.com/SSNamahsos/Mihani-Code/internal/config"
+	"github.com/SSNamahsos/Mihani-Code/internal/secrets"
 )
 
 func TestOpenAIStreamCompletesAndKeepsHistory(t *testing.T) {

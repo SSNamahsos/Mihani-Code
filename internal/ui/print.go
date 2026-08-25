@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fazpadstudio/mihani-code/internal/agent"
-	"github.com/fazpadstudio/mihani-code/internal/config"
-	"github.com/fazpadstudio/mihani-code/internal/tools"
-	"github.com/fazpadstudio/mihani-code/internal/usage"
+	"github.com/SSNamahsos/Mihani-Code/internal/agent"
+	"github.com/SSNamahsos/Mihani-Code/internal/config"
+	"github.com/SSNamahsos/Mihani-Code/internal/tools"
+	"github.com/SSNamahsos/Mihani-Code/internal/usage"
 )
 
 // RunPrint executes one prompt headlessly: assistant text streams to stdout,

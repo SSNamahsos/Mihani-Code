@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fazpadstudio/mihani-code/internal/config"
-	"github.com/fazpadstudio/mihani-code/internal/ui"
+	"github.com/SSNamahsos/Mihani-Code/internal/config"
+	"github.com/SSNamahsos/Mihani-Code/internal/ui"
 )
 
 // version is overridden at build time with -ldflags "-X main.version=..."

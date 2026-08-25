@@ -1,4 +1,4 @@
-module github.com/fazpadstudio/mihani-code
+module github.com/SSNamahsos/Mihani-Code
 
 go 1.24
 

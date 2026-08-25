@@ -21,7 +21,29 @@ Mihani Code is a native Go terminal AI coding agent. It provides a focused works
 - Project and user skills via `SKILL.md`, MCP stdio servers via `.mihani/mcp.json`
 - Cross-platform shell execution (`cmd /C` on Windows, bash/sh elsewhere) and CRLF-tolerant file editing
 
-## Build
+## Install
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/SSNamahsos/Mihani-Code/main/install.ps1 | iex
+```
+
+**Linux / macOS:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SSNamahsos/Mihani-Code/main/install.sh | sh
+```
+
+**With Go 1.24+ (any platform):**
+
+```sh
+go install github.com/SSNamahsos/Mihani-Code/cmd/mihani@latest
+```
+
+All three routes give you a `mihani` binary you run inside any project directory. Prebuilt binaries for Windows, Linux, and macOS are attached to every [GitHub Release](https://github.com/SSNamahsos/Mihani-Code/releases) automatically by CI.
+
+## Build from source
 
 Requires Go 1.24 or newer.
 
@@ -160,6 +182,19 @@ Provider credentials ship inside the binary but are deliberately hard to extract
 Keys are also never exported to environment variables of child processes.
 
 > Note: a determined attacker with full control of their own machine can still reverse-engineer a distributed binary. This design prevents *casual* extraction through the app itself — for stronger guarantees, proxy requests through your own server that holds the key.
+
+### Distributing binaries with embedded credentials
+
+The credential blob never lives in git. To make release builds carry it:
+
+1. Base64-encode your local blob:
+   `[Convert]::ToBase64String([IO.File]::ReadAllBytes("internal/secrets/blob.bin")) | Set-Clipboard`
+2. GitHub repo → **Settings → Secrets and variables → Actions** → new repository secret named `BLOB`
+3. Push a version tag: `git tag v0.2.1; git push origin v0.2.1`
+
+CI decodes the secret back to `internal/secrets/blob.bin`, builds all five platform binaries with credentials embedded, and attaches them to the release. Without the secret, releases still build — but as credential-free placeholders (users then connect their own provider via `/connect`).
+
+Keep the repository public so the install one-liners and release downloads are reachable without authentication.
 
 ## Configuration
 

@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/fazpadstudio/mihani-code/internal/pricing"
-	"github.com/fazpadstudio/mihani-code/internal/secrets"
+	"github.com/SSNamahsos/Mihani-Code/internal/pricing"
+	"github.com/SSNamahsos/Mihani-Code/internal/secrets"
 )
 
 type Provider struct {

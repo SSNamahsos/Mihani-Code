@@ -10,12 +10,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/fazpadstudio/mihani-code/internal/config"
-	"github.com/fazpadstudio/mihani-code/internal/gitx"
-	"github.com/fazpadstudio/mihani-code/internal/mcp"
-	"github.com/fazpadstudio/mihani-code/internal/session"
-	"github.com/fazpadstudio/mihani-code/internal/tools"
-	"github.com/fazpadstudio/mihani-code/internal/usage"
+	"github.com/SSNamahsos/Mihani-Code/internal/config"
+	"github.com/SSNamahsos/Mihani-Code/internal/gitx"
+	"github.com/SSNamahsos/Mihani-Code/internal/mcp"
+	"github.com/SSNamahsos/Mihani-Code/internal/session"
+	"github.com/SSNamahsos/Mihani-Code/internal/tools"
+	"github.com/SSNamahsos/Mihani-Code/internal/usage"
 )
 
 type overlayItem struct {

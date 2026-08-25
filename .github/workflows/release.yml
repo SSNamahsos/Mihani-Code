@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: windows, goarch: amd64, ext: .exe }
+          - { goos: linux, goarch: amd64, ext: "" }
+          - { goos: linux, goarch: arm64, ext: "" }
+          - { goos: darwin, goarch: amd64, ext: "" }
+          - { goos: darwin, goarch: arm64, ext: "" }
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      # Optional embedded credentials: add a repository secret named BLOB
+      # containing base64(internal/secrets/blob.bin). Without it the binaries
+      # build from the committed placeholder (no credentials inside).
+      - name: Restore credential blob (if provided)
+        if: env.BLOB != ''
+        env:
+          BLOB: ${{ secrets.BLOB }}
+        run: printf '%s' "$BLOB" | base64 -d > internal/secrets/blob.bin
+
+      - name: Build
+        run: go build -trimpath -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o mihani-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} ./cmd/mihani
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: mihani-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+          generate_release_notes: true
