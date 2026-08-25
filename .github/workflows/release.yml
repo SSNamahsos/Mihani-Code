@@ -35,7 +35,14 @@ jobs:
         if: env.BLOB != ''
         env:
           BLOB: ${{ secrets.BLOB }}
-        run: printf '%s' "$BLOB" | base64 -d > internal/secrets/blob.bin
+        run: |
+          printf '%s' "$BLOB" | tr -d '[:space:]' | base64 -d > internal/secrets/blob.bin
+          BYTES=$(wc -c < internal/secrets/blob.bin)
+          echo "decoded credential blob: ${BYTES} bytes"
+          if [ ! -s internal/secrets/blob.bin ]; then
+            echo "::error::BLOB secret decoded to an empty file — re-check how it was generated"
+            exit 1
+          fi
 
       - name: Build
         run: go build -trimpath -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o mihani-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} ./cmd/mihani
