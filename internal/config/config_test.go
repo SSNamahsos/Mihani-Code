@@ -157,6 +157,48 @@ func TestBudgetZeroMeansDefaultAndNegativeDisables(t *testing.T) {
 	}
 }
 
+// Personal keys are the user's own credentials: they persist locally (unlike
+// embedded keys) and survive builtin refreshes/migrations.
+func TestPersonalKeyPersistsAndSurvivesMigration(t *testing.T) {
+	isolatedHome(t)
+	cfg := defaults()
+	p := cfg.Providers[BuiltinPrimary]
+	p.PersonalKey = "sk-my-own-key-abcdef123456"
+	cfg.Providers[BuiltinPrimary] = p
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "sk-my-own-key") {
+		t.Fatal("personal key should persist to the local config file")
+	}
+	if strings.Contains(string(raw), "api_key") {
+		t.Fatal("embedded api_key field must never appear alongside it")
+	}
+
+	loaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	personalKey := loaded.Providers[BuiltinPrimary].PersonalKey
+	if personalKey != "sk-my-own-key-abcdef123456" {
+		t.Fatalf("personal key lost after reload+migration: %q", personalKey)
+	}
+	if got := MaskedKey(personalKey); strings.Contains(got, "sk-my") || !strings.Contains(got, "••••") {
+		t.Fatalf("masked key reveals too much or formats wrong: %q", got)
+	}
+}
+
+func TestMaskedKeyEmpty(t *testing.T) {
+	if got := MaskedKey(""); got != "not set" {
+		t.Fatalf("empty mask = %q", got)
+	}
+}
+
 // The shared $10 credit belongs to the embedded keys: only built-in Mihani
 // endpoints are capped; user-connected providers are never throttled.
 func TestBudgetEnforcedOnlyForBuiltins(t *testing.T) {

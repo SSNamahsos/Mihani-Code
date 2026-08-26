@@ -20,6 +20,23 @@ type Provider struct {
 	// nil/true = native; false = Mihani drives tools via a prompt protocol
 	// (for gateways that strip the tools parameter, e.g. some proxies).
 	NativeTools *bool `json:"native_tools,omitempty"`
+	// PersonalKey is the user's OWN key for this endpoint (bought from the
+	// provider's website). It has a separate server-side quota, so Mihani
+	// automatically falls back to it when the shared embedded-key budget is
+	// exhausted. Stored locally in config.json by explicit user action.
+	PersonalKey string `json:"personal_key,omitempty"`
+}
+
+// MaskedKey renders a short non-revealing fingerprint of a secret.
+func MaskedKey(key string) string {
+	if key == "" {
+		return "not set"
+	}
+	tail := key
+	if len(tail) > 4 {
+		tail = tail[len(tail)-4:]
+	}
+	return "configured ••••" + tail
 }
 
 // UseNativeTools reports whether tool calls should use the API's function
@@ -123,11 +140,23 @@ func Load() (Config, error) {
 
 // migrateBuiltins injects the shipped endpoints, removes ids from earlier
 // releases (so endpoint names never linger in config or overlays), and
-// repoints the active selection when its id was renamed.
+// repoints the active selection when its id was renamed. Personal keys the
+// user stored for a built-in endpoint survive the refresh.
 func migrateBuiltins(c *Config) {
+	personal := map[string]string{}
+	for name, p := range c.Providers {
+		if p.PersonalKey != "" {
+			personal[name] = p.PersonalKey
+		}
+	}
 	for name, builtin := range defaults().Providers {
+		if key, ok := personal[name]; ok {
+			builtin.PersonalKey = key
+		}
 		c.Providers[name] = builtin
 	}
+	delete(personal, BuiltinPrimary)
+	delete(personal, BuiltinSecondary)
 	for legacy := range legacyBuiltinIDs {
 		delete(c.Providers, legacy)
 	}

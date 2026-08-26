@@ -179,6 +179,20 @@ Rate estimates are editable per model pattern without recompiling:
 
 `/settings → Reset usage window` clears today's spend record.
 
+## Bring your own key (auto-fallback)
+
+Have your own API key from the provider's website? Store it once and Mihani uses it automatically whenever the shared daily credit runs out — no manual switching:
+
+1. `/settings` → **Personal API key · Mihani Cloud** (or *Mihani Pro*) → `enter`
+2. Paste your key, `enter` to save (`esc` cancels; submitting an empty value removes it)
+
+From then on:
+
+- While shared credit remains, requests use it as usual
+- The moment the $10 cap trips, the next turn transparently switches to your personal key — a toast announces *"Shared limit reached — using your personal API key"* and the status meter turns cyan: `$X.XX personal`
+- Personal usage has **no cap** (it is your own quota) and is tracked separately from the shared bucket
+- Your key lives only in your local `config.json`, is never displayed again (shown masked as `configured ••••1234`), and is scrubbed from every tool output like all other secrets
+
 ## API key protection
 
 Provider credentials ship inside the binary but are deliberately hard to extract:

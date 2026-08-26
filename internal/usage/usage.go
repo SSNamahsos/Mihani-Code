@@ -20,7 +20,16 @@ type Entry struct {
 	Input    int       `json:"input_tokens"`
 	Output   int       `json:"output_tokens"`
 	CostUSD  float64   `json:"cost_usd"`
+	// KeyKind distinguishes shared embedded-key usage ("", the historical
+	// default, and "embedded") from a user's own "personal" key.
+	KeyKind string `json:"key_kind,omitempty"`
 }
+
+// Key kinds.
+const (
+	Embedded = "embedded"
+	Personal = "personal"
+)
 
 type store struct {
 	Entries []Entry `json:"entries"`
@@ -82,22 +91,39 @@ func Add(e Entry) {
 }
 
 // WindowSum returns total USD spent on a provider within the last 24 hours.
-// An empty provider sums across all providers.
+// An empty provider sums across all providers. All key kinds are included —
+// use WindowSumFor when the shared-cap math needs embedded usage only.
 func WindowSum(provider string) float64 {
+	return WindowSumFor(provider, "")
+}
+
+// WindowSumFor totals USD for a provider filtered by key kind. kind "" means
+// no filter; "embedded" also matches historical entries written before the
+// personal-key feature existed.
+func WindowSumFor(provider, kind string) float64 {
 	mu.Lock()
 	defer mu.Unlock()
 	s := prune(load())
 	sum := 0.0
 	for _, e := range s.Entries {
-		if provider == "" || e.Provider == provider {
-			sum += e.CostUSD
+		if provider != "" && e.Provider != provider {
+			continue
 		}
+		if kind == Embedded {
+			if e.KeyKind != "" && e.KeyKind != Embedded {
+				continue
+			}
+		} else if kind != "" && e.KeyKind != kind {
+			continue
+		}
+		sum += e.CostUSD
 	}
 	return sum
 }
 
 // NextReset reports when the oldest entry inside the current window leaves it,
-// i.e. when budget headroom next increases. Zero means nothing is tracked.
+// i.e. when budget headroom next increases. Only shared (embedded) usage
+// counts — personal keys have their own quota. Zero means nothing is tracked.
 func NextReset(provider string) time.Time {
 	mu.Lock()
 	defer mu.Unlock()
@@ -105,6 +131,9 @@ func NextReset(provider string) time.Time {
 	var oldest time.Time
 	for _, e := range s.Entries {
 		if provider != "" && e.Provider != provider {
+			continue
+		}
+		if e.KeyKind == Personal {
 			continue
 		}
 		if oldest.IsZero() || e.Time.Before(oldest) {

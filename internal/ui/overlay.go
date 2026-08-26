@@ -13,6 +13,7 @@ import (
 	"github.com/SSNamahsos/Mihani-Code/internal/config"
 	"github.com/SSNamahsos/Mihani-Code/internal/gitx"
 	"github.com/SSNamahsos/Mihani-Code/internal/mcp"
+	"github.com/SSNamahsos/Mihani-Code/internal/secrets"
 	"github.com/SSNamahsos/Mihani-Code/internal/session"
 	"github.com/SSNamahsos/Mihani-Code/internal/tools"
 	"github.com/SSNamahsos/Mihani-Code/internal/usage"
@@ -105,17 +106,26 @@ func (m *Model) selectOverlayItem() {
 
 	case m.overlay == "Settings":
 		if m.overlayIndex < len(m.overlayItems) {
-			switch m.overlayItems[m.overlayIndex].label {
-			case "Auto confirm":
+			label := m.overlayItems[m.overlayIndex].label
+			switch {
+			case label == "Auto confirm":
 				m.cfg.AutoConfirm = !m.cfg.AutoConfirm
 				_ = m.cfg.Save()
 				m.openOverlay("Settings", m.settingsItems())
 				return
-			case "Reset usage window":
+			case label == "Reset usage window":
 				usage.Reset()
 				m.refreshSpend()
 				m.openOverlay("Settings", m.settingsItems())
 				return
+			case strings.HasPrefix(label, "Personal API key · "):
+				short := strings.TrimPrefix(label, "Personal API key · ")
+				for _, id := range []string{config.BuiltinPrimary, config.BuiltinSecondary} {
+					if m.cfg.Providers[id].Label == short {
+						m.openKeyEditor(id)
+						return
+					}
+				}
 			}
 		}
 		m.closeOverlay()
@@ -397,15 +407,103 @@ func (m *Model) settingsItems() []overlayItem {
 	} else {
 		used = fmt.Sprintf("$%.2f tracked — not capped (your own credentials)", m.spend)
 	}
-	return []overlayItem{
+	items := []overlayItem{
 		{label: "Auto confirm", detail: auto + "  (enter toggles)"},
 		{label: "Reset usage window", detail: "clear today's spend record  (enter resets)"},
 		{label: "Daily budget", detail: fmt.Sprintf("$%.2f on Mihani built-in endpoints only", m.cfg.Budget())},
 		{label: "Used (24h)", detail: used},
-		{label: "Max iterations", detail: fmt.Sprintf("%d tool loops per turn", effectiveIterations(m.cfg))},
-		{label: "Context window", detail: fmt.Sprintf("%d tokens", m.cfg.ContextWindow)},
-		{label: "Max output tokens", detail: fmt.Sprint(m.cfg.MaxTokens)},
 	}
+	// Personal keys: the user's own credentials for a built-in endpoint, used
+	// automatically when the shared daily credit runs out.
+	for _, id := range []string{config.BuiltinPrimary, config.BuiltinSecondary} {
+		p := m.cfg.Providers[id]
+		detail := config.MaskedKey(p.PersonalKey) + "  (enter to set/clear)"
+		if p.PersonalKey != "" {
+			detail += " · auto-fallback on"
+		}
+		items = append(items, overlayItem{label: "Personal API key · " + p.Label, detail: detail})
+	}
+	items = append(items,
+		overlayItem{label: "Max iterations", detail: fmt.Sprintf("%d tool loops per turn", effectiveIterations(m.cfg))},
+		overlayItem{label: "Context window", detail: fmt.Sprintf("%d tokens", m.cfg.ContextWindow)},
+		overlayItem{label: "Max output tokens", detail: fmt.Sprint(m.cfg.MaxTokens)},
+	)
+	return items
+}
+
+// openKeyEditor starts the personal-key prompt for a provider.
+func (m *Model) openKeyEditor(providerID string) {
+	m.closeOverlay()
+	m.keyEditOpen = true
+	m.keyEditTarget = providerID
+	m.connectInput.Reset()
+	m.connectInput.SetValue(m.cfg.Providers[providerID].PersonalKey)
+	m.connectInput.Placeholder = "paste your key — submit empty to remove"
+	m.connectInput.SetWidth(minInt(58, maxInt(20, m.width-20)))
+	m.connectInput.Focus()
+}
+
+func (m *Model) closeKeyEditor() {
+	m.keyEditOpen = false
+	m.keyEditTarget = ""
+	m.connectInput.Blur()
+	m.connectInput.Reset()
+}
+
+// updateKeyEditor handles keystrokes inside the personal-key prompt.
+func (m *Model) updateKeyEditor(key tea.KeyMsg) tea.Cmd {
+	switch key.String() {
+	case "esc":
+		m.closeKeyEditor()
+		return nil
+	case "enter":
+		value := strings.TrimSpace(m.connectInput.Value())
+		label := m.keyEditTarget
+		p := m.cfg.Providers[label]
+		p.PersonalKey = value
+		m.cfg.Providers[label] = p
+		if err := m.cfg.Save(); err != nil {
+			m.notify("Could not save: " + err.Error())
+		} else if value == "" {
+			m.notify("Personal key removed")
+		} else {
+			secrets.Register(value)
+			m.notify("Personal key saved for " + p.Label + " — auto-fallback armed")
+		}
+		m.agent.Cfg = m.cfg
+		m.closeKeyEditor()
+		return nil
+	}
+	var cmd tea.Cmd
+	m.connectInput, cmd = m.connectInput.Update(key)
+	return cmd
+}
+
+// keyEditorView renders the personal-key entry modal.
+func (m *Model) keyEditorView() string {
+	boxWidth := minInt(70, maxInt(50, m.width-8))
+	p := m.cfg.Providers[m.keyEditTarget]
+	body := lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().Bold(true).Foreground(colAccent).Render("Personal API key · "+p.Label),
+		lipgloss.NewStyle().Foreground(colFaint).Render(
+			"Your own key for this endpoint. When the shared daily credit is\nexhausted, Mihani switches to it automatically. Stored only in\nyour local config file and never displayed again."),
+		"",
+		lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colAccent).
+			Padding(0, 1).
+			Width(boxWidth-8).
+			Render(m.connectInput.View()),
+		"",
+		lipgloss.NewStyle().Foreground(colFaint).Render("enter save · esc cancel"),
+	)
+	box := lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(colAccent).
+		Padding(1, 3).
+		Width(boxWidth).
+		Render(body)
+	return lipgloss.Place(m.width, maxInt(1, m.height), lipgloss.Center, lipgloss.Center, box)
 }
 
 // providerDisplay maps a stored provider id to its public-facing name,

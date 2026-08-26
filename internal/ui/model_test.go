@@ -146,7 +146,8 @@ func TestEnterQueuesPromptWhileBusy(t *testing.T) {
 }
 
 func TestFinishTurnFlushesQueue(t *testing.T) {
-	m := Model{input: newInput(""), activeAssistant: -1, activeTool: -1, queued: "next task"}
+	m := Model{input: newInput(""), activeAssistant: -1, activeTool: -1, queued: "next task",
+		agent: &agent.Agent{}}
 	m.cfg.BudgetUSD = -1 // keep the flush independent of real usage on this machine
 	cmd := m.finishTurn(resultMsg{})
 	if cmd == nil {
@@ -317,12 +318,14 @@ func TestProviderDisplayNeverLeaksEndpointNames(t *testing.T) {
 
 // The budget block must not name the upstream provider.
 func TestBudgetMessageIsNeutral(t *testing.T) {
+	isolatedUsageHome(t)
+	usage.Add(usage.Entry{Provider: config.BuiltinPrimary, CostUSD: 10.00, Time: time.Now()})
 	m := Model{
 		cfg:             config.Config{CurrentProvider: config.BuiltinPrimary, BudgetUSD: 10},
-		spend:           10,
 		activeAssistant: -1,
 		activeTool:      -1,
 	}
+	m.refreshSpend()
 	msg := m.budgetBlock()
 	if msg == "" {
 		t.Fatal("expected a limit message at the cap")
@@ -648,6 +651,7 @@ func TestBudgetDoesNotGateCustomProviders(t *testing.T) {
 		view:            viewport.New(80, 20),
 		width:           100,
 		height:          40,
+		agent:           &agent.Agent{},
 	}
 	m.refreshSpend()
 
@@ -661,6 +665,81 @@ func TestBudgetDoesNotGateCustomProviders(t *testing.T) {
 		t.Fatal("turn on custom provider should start even far over the built-in budget")
 	}
 	m.cancel()
+}
+
+// When the shared cap is exhausted and a personal key exists, the next turn
+// silently fails over to it instead of blocking — and billing flips buckets.
+func TestPersonalKeyAutoFailover(t *testing.T) {
+	isolatedUsageHome(t)
+	usage.Add(usage.Entry{Provider: config.BuiltinPrimary, CostUSD: 10.00, Time: time.Now()})
+
+	m := Model{
+		cfg: config.Config{
+			CurrentProvider: config.BuiltinPrimary, CurrentModel: "glm-5.3", BudgetUSD: 10,
+			Providers: map[string]config.Provider{config.BuiltinPrimary: {
+				Type: "openai", BaseURL: "http://127.0.0.1:1/v1",
+				PersonalKey: "sk-personal-fallback-9876",
+			}},
+		},
+		input:           newInput(""),
+		activeAssistant: -1,
+		activeTool:      -1,
+		view:            viewport.New(80, 20),
+		width:           100,
+		height:          40,
+		agent:           &agent.Agent{},
+	}
+	m.refreshSpend()
+
+	if msg := m.budgetBlock(); msg != "" {
+		t.Fatalf("personal key should prevent the hard block, got %q", msg)
+	}
+	cmd := m.startTurn("hello")
+	if cmd == nil || !m.busy {
+		t.Fatal("failover turn should start")
+	}
+	if m.keyKind != usage.Personal {
+		t.Fatalf("key kind not switched: %q", m.keyKind)
+	}
+	got := m.agent.Cfg.Providers[config.BuiltinPrimary].APIKey
+	if got != "sk-personal-fallback-9876" {
+		t.Fatalf("agent not using personal key: %q", got)
+	}
+	if label := m.spendLabel(); !strings.Contains(label, "personal") {
+		t.Fatalf("meter should show personal bucket mid-turn: %q", label)
+	}
+	m.cancel()
+	m.finishTurn(resultMsg{})
+	if m.keyKind != "" {
+		t.Fatalf("kind must reset after the turn, got %q", m.keyKind)
+	}
+}
+
+// Without a stored personal key the cap still blocks with guidance.
+func TestCapStillBlocksWithoutPersonalKey(t *testing.T) {
+	isolatedUsageHome(t)
+	usage.Add(usage.Entry{Provider: config.BuiltinPrimary, CostUSD: 11.00, Time: time.Now()})
+
+	m := Model{
+		cfg: config.Config{
+			CurrentProvider: config.BuiltinPrimary, CurrentModel: "glm-5.3", BudgetUSD: 10,
+			Providers: map[string]config.Provider{config.BuiltinPrimary: {Type: "openai"}},
+		},
+		input:           newInput(""),
+		activeAssistant: -1,
+		activeTool:      -1,
+		view:            viewport.New(80, 20),
+		width:           100,
+		height:          40,
+	}
+	m.refreshSpend()
+
+	if msg := m.budgetBlock(); msg == "" {
+		t.Fatal("expected the hard block without a personal key")
+	}
+	if cmd := m.startTurn("hello"); cmd != nil || m.busy {
+		t.Fatal("turn must stay blocked")
+	}
 }
 
 // The daily cap must refuse to start new turns once the rolling 24h spend
@@ -708,6 +787,7 @@ func TestBudgetAllowsUnderCap(t *testing.T) {
 		view:            viewport.New(80, 20),
 		width:           100,
 		height:          40,
+		agent:           &agent.Agent{},
 	}
 	m.refreshSpend()
 

@@ -48,6 +48,29 @@ func TestOldEntriesArePruned(t *testing.T) {
 	}
 }
 
+// The shared cap counts embedded usage only; personal-key spend is tracked
+// separately and never blocks or delays the reset clock.
+func TestKeyKindFiltering(t *testing.T) {
+	isolatedHome(t)
+	Reset()
+
+	Add(Entry{Provider: "mihani", CostUSD: 10.00, Time: time.Now()})                   // legacy = embedded
+	Add(Entry{Provider: "mihani", CostUSD: 2.00, KeyKind: Embedded, Time: time.Now()}) // explicit
+	Add(Entry{Provider: "mihani", CostUSD: 7.50, KeyKind: Personal, Time: time.Now().Add(-time.Hour)})
+
+	if got := WindowSumFor("mihani", Embedded); got != 12.00 {
+		t.Fatalf("embedded sum = %v (legacy entries count as embedded), want 12.00", got)
+	}
+	if got := WindowSumFor("mihani", Personal); got != 7.50 {
+		t.Fatalf("personal sum = %v, want 7.50", got)
+	}
+	reset := NextReset("mihani")
+	want := time.Now().Add(window)
+	if reset.IsZero() || absDuration(reset.Sub(want)) > time.Minute*2 {
+		t.Fatalf("personal entry must not delay the shared reset: %v vs ~%v", reset, want)
+	}
+}
+
 func absDuration(d time.Duration) time.Duration {
 	if d < 0 {
 		return -d

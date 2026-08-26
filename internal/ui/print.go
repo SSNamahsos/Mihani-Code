@@ -21,10 +21,21 @@ func RunPrint(cfg config.Config, prompt string) error {
 	if err != nil {
 		return err
 	}
+	kind := ""
 	if budget := cfg.BudgetEnforced(cfg.CurrentProvider); budget > 0 {
-		if spend := usage.WindowSum(cfg.CurrentProvider); spend >= budget {
-			return fmt.Errorf("Mihani daily limit reached: $%.2f of $%.2f used in the last 24h",
-				spend, budget)
+		spend := usage.WindowSumFor(cfg.CurrentProvider, usage.Embedded)
+		if spend >= budget {
+			if p := cfg.Providers[cfg.CurrentProvider]; p.PersonalKey != "" {
+				kind = usage.Personal
+				fmt.Fprintln(os.Stderr, "· shared limit reached — using your personal API key")
+				eff := cfg
+				eff.Providers = map[string]config.Provider{cfg.CurrentProvider: p}
+				p.APIKey = p.PersonalKey
+				eff.Providers[cfg.CurrentProvider] = p
+				cfg = eff
+			} else {
+				return fmt.Errorf("Mihani daily limit reached: $%.2f of $%.2f used in the last 24h", spend, budget)
+			}
 		}
 	}
 	a := &agent.Agent{Cfg: cfg, Root: root}
@@ -64,13 +75,27 @@ func RunPrint(cfg config.Config, prompt string) error {
 						Input:    ev.InputTok,
 						Output:   ev.OutputTok,
 						CostUSD:  ev.CostUSD,
+						KeyKind:  keyKindOf(cfg, kind),
 					})
 					fmt.Fprintf(os.Stderr, "$ %.4f this request · %.2f today\n",
-						ev.CostUSD, usage.WindowSum(cfg.CurrentProvider))
+						ev.CostUSD, usage.WindowSumFor(cfg.CurrentProvider, usage.Embedded))
 				}
 			}
 		})
 	fmt.Println()
 	a.Close()
 	return err
+}
+
+// keyKindOf attributes billing to the right credential bucket: custom
+// providers are personal by definition, everything else follows the
+// failover decision made at startup.
+func keyKindOf(cfg config.Config, fallback string) string {
+	if fallback == usage.Personal {
+		return usage.Personal
+	}
+	if !cfg.IsBuiltinProvider(cfg.CurrentProvider) {
+		return usage.Personal
+	}
+	return usage.Embedded
 }

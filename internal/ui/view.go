@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/SSNamahsos/Mihani-Code/internal/usage"
 )
 
 const maxComposerLines = 8
@@ -64,6 +66,8 @@ func (m *Model) View() string {
 	switch {
 	case m.connectOpen:
 		return m.connectView()
+	case m.keyEditOpen:
+		return m.keyEditorView()
 	case m.overlay != "":
 		return m.overlayView()
 	case m.pendingApproval != nil:
@@ -157,11 +161,16 @@ func (m *Model) statusRow() string {
 
 // spendLabel renders the live daily budget meter for the active provider.
 // It appears only while using built-in Mihani endpoints — custom providers
-// are not subject to the shared credit cap.
+// are not subject to the shared credit cap. Personal-key turns meter in cyan
+// without a cap since it is the user's own quota.
 func (m *Model) spendLabel() string {
 	budget := m.cfg.BudgetEnforced(m.cfg.CurrentProvider)
 	if budget <= 0 {
 		return ""
+	}
+	if m.keyKind == usage.Personal {
+		return lipgloss.NewStyle().Foreground(colCyan).
+			Render(fmt.Sprintf("$%.2f personal", m.personalSpend))
 	}
 	style := lipgloss.NewStyle()
 	switch {

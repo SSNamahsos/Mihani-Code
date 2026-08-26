@@ -15,6 +15,7 @@ import (
 
 	"github.com/SSNamahsos/Mihani-Code/internal/agent"
 	"github.com/SSNamahsos/Mihani-Code/internal/config"
+	"github.com/SSNamahsos/Mihani-Code/internal/secrets"
 	"github.com/SSNamahsos/Mihani-Code/internal/session"
 	"github.com/SSNamahsos/Mihani-Code/internal/usage"
 )
@@ -105,15 +106,20 @@ type Model struct {
 	connectURL    string
 	connectError  string
 
+	keyEditOpen   bool
+	keyEditTarget string
+
 	sessionID    string
 	modeIndex    int
 	commandIndex int
 	quitting     bool
 
-	spend      float64 // rolling 24h spend for the current provider
-	toast      string  // transient notification shown in the status bar
-	toastUntil time.Time
-	toastTTL   time.Duration // test hook; zero means defaultToastTTL
+	spend         float64 // rolling 24h shared-key spend for the current provider
+	personalSpend float64 // rolling 24h personal-key spend
+	keyKind       string  // "" / usage.Embedded shared, usage.Personal when failed over
+	toast         string  // transient notification shown in the status bar
+	toastUntil    time.Time
+	toastTTL      time.Duration // test hook; zero means defaultToastTTL
 }
 
 const defaultToastTTL = 2500 * time.Millisecond
@@ -178,6 +184,10 @@ func New(cfg config.Config, version, resumeID, initialPrompt string) (Model, err
 	}
 	if resumed {
 		m.appendBlock(&block{kind: blockInfo, content: "resumed previous session " + shortID(m.sessionID)})
+	}
+	// Personal keys are user secrets: scrub them from every tool result too.
+	for _, id := range []string{config.BuiltinPrimary, config.BuiltinSecondary} {
+		secrets.Register(cfg.Providers[id].PersonalKey)
 	}
 	if initialPrompt != "" {
 		m.input.SetValue(initialPrompt)
@@ -333,6 +343,10 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			m.closeConnect()
 			return m, nil, true
 		}
+		if m.keyEditOpen {
+			m.closeKeyEditor()
+			return m, nil, true
+		}
 		if m.overlay != "" {
 			m.closeOverlay()
 			return m, nil, true
@@ -352,6 +366,9 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 
 	case m.connectOpen:
 		return m, m.updateConnectKey(x), true
+
+	case m.keyEditOpen:
+		return m, m.updateKeyEditor(x), true
 
 	case m.overlay != "":
 		return m, m.updateOverlayKey(x), true
@@ -517,21 +534,38 @@ func (m *Model) answerApproval(ok bool) {
 	}
 }
 
-// refreshSpend re-reads the rolling 24h total for the active provider.
+// keyKindOf resolves the credential variant currently in force for billing
+// attribution. Non-built-in providers are personal by definition.
+func (m *Model) keyKindOf() string {
+	if m.keyKind == usage.Personal {
+		return usage.Personal
+	}
+	if !m.cfg.IsBuiltinProvider(m.cfg.CurrentProvider) {
+		return usage.Personal
+	}
+	return usage.Embedded
+}
+
+// refreshSpend re-reads the rolling 24h totals for the active provider.
 func (m *Model) refreshSpend() {
-	m.spend = usage.WindowSum(m.cfg.CurrentProvider)
+	m.spend = usage.WindowSumFor(m.cfg.CurrentProvider, usage.Embedded)
+	m.personalSpend = usage.WindowSumFor(m.cfg.CurrentProvider, usage.Personal)
 }
 
 // budgetBlock returns a user-facing message when the daily cap is exhausted,
 // or "" when the turn may proceed. Only built-in Mihani providers are capped;
-// user-connected providers run on their own credentials.
+// when the user stored a personal key for that endpoint, Mihani fails over to
+// it instead of blocking.
 func (m *Model) budgetBlock() string {
 	budget := m.cfg.BudgetEnforced(m.cfg.CurrentProvider)
 	if budget <= 0 {
 		return ""
 	}
-	if m.spend < budget {
+	if m.embeddedSpend() < budget {
 		return ""
+	}
+	if p := m.cfg.Providers[m.cfg.CurrentProvider]; p.PersonalKey != "" {
+		return "" // failover handles it
 	}
 	reset := usage.NextReset(m.cfg.CurrentProvider)
 	when := "soon"
@@ -543,8 +577,46 @@ func (m *Model) budgetBlock() string {
 	}
 	return fmt.Sprintf(
 		"Mihani daily limit reached: $%.2f of $%.2f used in the last 24h. "+
-			"Budget resets in %s — switch provider with /providers, use a free model, or raise budget_usd in settings.",
+			"Budget resets in %s — add your own key via /settings → Personal API key, switch provider with /providers, use a free model, or raise budget_usd in settings.",
 		m.spend, budget, when)
+}
+
+// embeddedSpend is shared-key spend only — personal keys have their own quota.
+func (m *Model) embeddedSpend() float64 {
+	return usage.WindowSumFor(m.cfg.CurrentProvider, usage.Embedded)
+}
+
+// pickKeyKind decides which credential variant serves this turn and prepares
+// an effective config carrying it. Returns "" for the shared embedded key.
+func (m *Model) pickKeyKind() string {
+	budget := m.cfg.BudgetEnforced(m.cfg.CurrentProvider)
+	if budget <= 0 || m.embeddedSpend() < budget {
+		m.keyKind = ""
+		return ""
+	}
+	p := m.cfg.Providers[m.cfg.CurrentProvider]
+	if p.PersonalKey == "" {
+		return "" // caller blocks via budgetBlock
+	}
+	m.keyKind = usage.Personal
+	return usage.Personal
+}
+
+// effectiveCfg clones the config with the personal key promoted to APIKey so
+// every request this turn authenticates as the user.
+func (m *Model) effectiveCfg(kind string) config.Config {
+	if kind != usage.Personal {
+		return m.cfg
+	}
+	eff := m.cfg
+	eff.Providers = make(map[string]config.Provider, len(m.cfg.Providers))
+	for k, v := range m.cfg.Providers {
+		eff.Providers[k] = v
+	}
+	p := eff.Providers[m.cfg.CurrentProvider]
+	p.APIKey = p.PersonalKey
+	eff.Providers[m.cfg.CurrentProvider] = p
+	return eff
 }
 
 // scrollUp pins the transcript to its position: new output will no longer
@@ -727,10 +799,14 @@ func (m *Model) submit(s string) tea.Cmd {
 }
 
 func (m *Model) startTurn(prompt string) tea.Cmd {
+	kind := m.pickKeyKind()
 	if blocked := m.budgetBlock(); blocked != "" {
 		m.appendBlock(&block{kind: blockError, content: blocked})
 		m.refreshView()
 		return nil
+	}
+	if kind == usage.Personal {
+		m.notify("Shared limit reached — using your personal API key")
 	}
 	m.closeActiveAssistant()
 	m.blocks = append(m.blocks, &block{kind: blockUser, content: prompt})
@@ -744,11 +820,11 @@ func (m *Model) startTurn(prompt string) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	modeName := currentMode(m.modeIndex).name
-	cfg := m.cfg
+	cfg := m.effectiveCfg(kind)
+	a := m.agent
+	a.Cfg = cfg
+	a.Root = m.root
 	return tea.Sequence(tick(), func() tea.Msg {
-		a := m.agent
-		a.Cfg = cfg
-		a.Root = m.root
 		err := a.Send(ctx, prompt, modeName,
 			func(name string, input map[string]any) bool {
 				if m.approveAll || cfg.AutoConfirm {
@@ -784,6 +860,7 @@ func (m *Model) finishTurn(x resultMsg) tea.Cmd {
 	m.busy = false
 	m.activity = ""
 	m.status = "ready"
+	m.keyKind = "" // next turn re-evaluates the credential variant
 	m.saveSession()
 	err := x.err
 	cancelled := err != nil && (errors.Is(err, context.Canceled) ||
@@ -906,6 +983,7 @@ func (m *Model) handle(e agent.Event) {
 				Input:    e.InputTok,
 				Output:   e.OutputTok,
 				CostUSD:  e.CostUSD,
+				KeyKind:  m.keyKindOf(),
 			})
 		}
 		m.refreshSpend()
