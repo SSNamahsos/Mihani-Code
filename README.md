@@ -95,7 +95,7 @@ mihani --version
 | `ctrl+j` / `alt+enter` | newline inside the composer |
 | `/` … | type to filter the command palette |
 | `tab` / `shift+tab` | cycle modes (navigate the palette when it is open) |
-| `pgup` / `pgdn` | scroll the transcript |
+| `mouse wheel` / `pgup` / `pgdn` | scroll the transcript (hold `shift` and drag to select text for copying) |
 | `esc` | interrupt the current request, clear input, close overlays |
 | `ctrl+c` | cancel request → deny pending approval → quit |
 
@@ -137,6 +137,12 @@ Mihani Code ships with two built-in backends presented under Mihani branding —
 | `mihani-pro` | Mihani Pro | `claude-opus-5`, `claude-opus-4-8`, `claude-fable-5`, `claude-sonnet-5`, `gpt-5.6-sol`, `grok-4-5` |
 
 Switch with `/providers` and `/models`; `/connect` adds any other OpenAI-compatible endpoint under a name you choose. Upstream identifiers from earlier releases are renamed automatically on first launch and never shown in the UI.
+
+### Endpoints without native tool calling
+
+Some gateways strip OpenAI's `tools` parameter, so models there never see file/shell tools. For those, set `"native_tools": false` on the provider (the second built-in endpoint ships this way) and Mihani drives tools through a text protocol instead: the tool catalog joins the system prompt, the model replies with `<tool_call>{...}</tool_call>` blocks, Mihani executes them locally and feeds back `<tool_result>` blocks until the task completes. This works with any chat-completions endpoint — tools become a property of Mihani, not of the API.
+
+Reasoning models are supported throughout: streamed `reasoning_content` (GLM/DeepSeek style) and Anthropic `thinking` deltas render in a dedicated dimmed thinking block above the answer.
 
 ## Cost tracking and daily budget
 

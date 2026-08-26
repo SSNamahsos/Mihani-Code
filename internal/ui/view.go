@@ -131,7 +131,7 @@ func (m *Model) statusRow() string {
 		left = lipgloss.NewStyle().Foreground(colCyan).Render("… message queued")
 	default:
 		left = lipgloss.NewStyle().Foreground(colFaint).
-			Render("/ commands · tab mode · pgup/pgdn history · ctrl+c quit")
+			Render("/ commands · tab mode · wheel/pgup scroll · ctrl+c quit")
 	}
 	window := m.cfg.ContextWindow
 	if window <= 0 {
@@ -252,8 +252,8 @@ func (m *Model) welcome() string {
 	keys := []string{
 		lipgloss.NewStyle().Foreground(colText).Render("/ commands") + lipgloss.NewStyle().Foreground(colFaint).Render("   browse everything mihani can do"),
 		lipgloss.NewStyle().Foreground(colText).Render("tab modes") + lipgloss.NewStyle().Foreground(colFaint).Render("     build, plan, research, or ask"),
+		lipgloss.NewStyle().Foreground(colText).Render("wheel scroll") + lipgloss.NewStyle().Foreground(colFaint).Render("    mouse wheel or pgup/pgdn for history (shift+drag to select)"),
 		lipgloss.NewStyle().Foreground(colText).Render("enter send") + lipgloss.NewStyle().Foreground(colFaint).Render("     queue more messages while working"),
-		lipgloss.NewStyle().Foreground(colText).Render("pgup/pgdn") + lipgloss.NewStyle().Foreground(colFaint).Render("     scroll the transcript"),
 	}
 
 	examples := []string{

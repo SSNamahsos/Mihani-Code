@@ -74,6 +74,9 @@ func (a *Agent) Send(ctx context.Context, prompt, mode string, approve func(stri
 		emit(Event{Kind: "activity", Text: "MCP unavailable: " + err.Error()})
 	}
 	p := a.Cfg.Providers[a.Cfg.CurrentProvider]
+	if !p.UseNativeTools() {
+		return a.sendPromptBased(ctx, p, prompt, mode, approve, emit)
+	}
 	if p.Type == "anthropic" {
 		return a.sendAnthropic(ctx, p, prompt, mode, approve, emit)
 	}
@@ -91,7 +94,7 @@ func (a *Agent) sendOpenAI(ctx context.Context, p config.Provider, prompt, mode 
 	for iteration := 1; iteration <= a.iterations(); iteration++ {
 		emit(Event{Kind: "activity", Text: "thinking", Iteration: iteration})
 		a.compactHistory()
-		assistant, calls, apiIn, apiOut, responseChars, err := a.openAIRequest(ctx, p, emit)
+		assistant, calls, apiIn, apiOut, responseChars, err := a.openAIRequest(ctx, p, true, emit)
 		if err != nil {
 			return err
 		}
@@ -117,14 +120,16 @@ type toolCall struct {
 	Input    map[string]any
 }
 
-func (a *Agent) openAIRequest(ctx context.Context, p config.Provider, emit func(Event)) (map[string]any, []toolCall, int, int, int, error) {
+func (a *Agent) openAIRequest(ctx context.Context, p config.Provider, useTools bool, emit func(Event)) (map[string]any, []toolCall, int, int, int, error) {
 	body := map[string]any{
 		"model":          a.Cfg.CurrentModel,
 		"max_tokens":     a.Cfg.MaxTokens,
 		"stream":         true,
 		"messages":       a.history,
-		"tools":          a.openAITools(),
 		"stream_options": map[string]any{"include_usage": true},
+	}
+	if useTools {
+		body["tools"] = a.openAITools()
 	}
 	b, err := json.Marshal(body)
 	if err != nil {
@@ -168,9 +173,11 @@ func (a *Agent) openAIRequest(ctx context.Context, p config.Provider, emit func(
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Role      string `json:"role"`
-					Content   string `json:"content"`
-					ToolCalls []struct {
+					Role             string `json:"role"`
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
+					Reasoning        string `json:"reasoning"`
+					ToolCalls        []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
 						Function struct {
@@ -199,6 +206,11 @@ func (a *Agent) openAIRequest(ctx context.Context, p config.Provider, emit func(
 			continue
 		}
 		delta := chunk.Choices[0].Delta
+		if delta.ReasoningContent != "" || delta.Reasoning != "" {
+			part := delta.ReasoningContent + delta.Reasoning
+			responseChars += len(part)
+			emit(Event{Kind: "reasoning", Text: part})
+		}
 		if delta.Content != "" {
 			content.WriteString(delta.Content)
 			responseChars += len(delta.Content)
@@ -374,7 +386,7 @@ func (a *Agent) anthropicRequest(ctx context.Context, p config.Provider, mode st
 			current = &blocks[len(blocks)-1]
 		case "content_block_delta":
 			if event.Delta["type"] == "thinking_delta" {
-				emit(Event{Kind: "thinking", Text: fmt.Sprint(event.Delta["thinking"])})
+				emit(Event{Kind: "reasoning", Text: fmt.Sprint(event.Delta["thinking"])})
 			}
 			if event.Delta["type"] == "text_delta" {
 				part := fmt.Sprint(event.Delta["text"])

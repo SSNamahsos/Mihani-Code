@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -335,6 +336,63 @@ func defaultsForTest() map[string]config.Provider {
 	return map[string]config.Provider{
 		config.BuiltinPrimary:   {Label: "Mihani Cloud", Type: "openai"},
 		config.BuiltinSecondary: {Label: "Mihani Pro", Type: "openai"},
+	}
+}
+
+// Reasoning deltas stream into a dedicated dimmed thinking block that closes
+// as soon as real answer text arrives.
+func TestReasoningStreamsIntoThinkingBlock(t *testing.T) {
+	m := Model{activeAssistant: -1, activeTool: -1, activeThinking: -1}
+	m.handle(agent.Event{Kind: "reasoning", Text: "analyzing"})
+	m.handle(agent.Event{Kind: "reasoning", Text: " the diff"})
+	if len(m.blocks) != 1 || m.blocks[0].kind != blockThinking {
+		t.Fatalf("expected one thinking block, got %#v", m.blocks)
+	}
+	if m.blocks[0].content != "analyzing the diff" {
+		t.Fatalf("reasoning content mismatched: %q", m.blocks[0].content)
+	}
+
+	// Answer text must close the thinking block and open an assistant block.
+	m.handle(agent.Event{Kind: "text", Text: "Here is my answer."})
+	if m.activeThinking != -1 {
+		t.Fatal("thinking block not closed when answer text arrived")
+	}
+	if len(m.blocks) != 2 || m.blocks[1].kind != blockAssistant {
+		t.Fatalf("expected assistant block after reasoning, got %#v", m.blocks)
+	}
+
+	// Later reasoning starts a fresh thinking block.
+	m.handle(agent.Event{Kind: "reasoning", Text: "more thoughts"})
+	if len(m.blocks) != 3 || m.blocks[2].kind != blockThinking || m.activeThinking != 2 {
+		t.Fatalf("second reasoning segment mishandled: %#v active=%d", m.blocks, m.activeThinking)
+	}
+
+	// Rendering stays within width and marks the header.
+	out := m.blocks[2].render(80, "⠋")
+	if !strings.Contains(out, "thinking") || !strings.Contains(out, "more thoughts") {
+		t.Fatalf("thinking render missing parts: %q", out)
+	}
+}
+
+func TestMouseWheelScrollsTranscript(t *testing.T) {
+	m := newTestModel(100, 40)
+	for i := 0; i < 50; i++ {
+		m.appendBlock(&block{kind: blockInfo, content: fmt.Sprintf("line %d of filler transcript text", i)})
+	}
+	m.relayout()
+	m.refreshView()
+	bottom := m.view.YOffset
+
+	next, _ := m.Update(tea.MouseMsg{X: 5, Y: 5, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	_ = next
+	if m.view.YOffset >= bottom {
+		t.Fatalf("wheel-up did not scroll up: y=%d bottom=%d", m.view.YOffset, bottom)
+	}
+	before := m.view.YOffset
+	next, _ = m.Update(tea.MouseMsg{X: 5, Y: 5, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	_ = next
+	if m.view.YOffset <= before {
+		t.Fatalf("wheel-down did not scroll down: y=%d before=%d", m.view.YOffset, before)
 	}
 }
 

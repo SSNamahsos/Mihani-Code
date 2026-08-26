@@ -62,6 +62,7 @@ type Model struct {
 	blocks          []*block
 	activeAssistant int // index of the assistant block receiving stream deltas
 	activeTool      int // index of the running tool block
+	activeThinking  int // index of the live reasoning block
 
 	busy   bool
 	queued string
@@ -133,6 +134,7 @@ func New(cfg config.Config, version, resumeID, initialPrompt string) (Model, err
 		agent:           &agent.Agent{Cfg: cfg, Root: root},
 		activeAssistant: -1,
 		activeTool:      -1,
+		activeThinking:  -1,
 		status:          "ready",
 		sessionID:       session.NewID(),
 		modeIndex:       0,
@@ -236,7 +238,7 @@ func Run(cfg config.Config, version, resumeID, initialPrompt string) error {
 	if err != nil {
 		return err
 	}
-	p := tea.NewProgram(&m, tea.WithAltScreen())
+	p := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	m.program = p
 	_, runErr := p.Run()
 	m.agent.Close()
@@ -260,6 +262,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if next, cmd, handled := m.handleKey(x); handled {
 			return next, cmd
+		}
+
+	case tea.MouseMsg:
+		if x.Action == tea.MouseActionPress {
+			switch x.Button {
+			case tea.MouseButtonWheelUp:
+				m.view.LineUp(3)
+				return m, nil
+			case tea.MouseButtonWheelDown:
+				m.view.LineDown(3)
+				return m, nil
+			}
 		}
 
 	case eventMsg:
@@ -547,10 +561,24 @@ func (m *Model) finishTurn(x resultMsg) tea.Cmd {
 
 func (m *Model) handle(e agent.Event) {
 	switch e.Kind {
+	case "reasoning", "thinking":
+		if e.Text == "" {
+			return
+		}
+		if m.activeThinking < 0 {
+			m.blocks = append(m.blocks, &block{kind: blockThinking})
+			m.activeThinking = len(m.blocks) - 1
+		}
+		b := m.blocks[m.activeThinking]
+		b.content += e.Text
+		b.invalidate()
+		m.refreshView()
+
 	case "text":
 		if e.Text == "" {
 			return
 		}
+		m.closeActiveThinking()
 		if m.activeAssistant < 0 {
 			m.blocks = append(m.blocks, &block{kind: blockAssistant})
 			m.activeAssistant = len(m.blocks) - 1
@@ -560,16 +588,13 @@ func (m *Model) handle(e agent.Event) {
 		b.invalidate()
 		m.refreshView()
 
-	case "thinking":
-		m.activity = "thinking"
-		m.status = "thinking"
-
 	case "activity":
 		m.activity = e.Text
 		m.status = e.Text
 
 	case "tool_start", "tool":
 		m.closeActiveAssistant()
+		m.closeActiveThinking()
 		m.blocks = append(m.blocks, &block{
 			kind:   blockTool,
 			label:  e.Tool,
@@ -638,9 +663,24 @@ func (m *Model) handle(e agent.Event) {
 
 	case "done":
 		m.closeActiveAssistant()
+		m.closeActiveThinking()
 		m.activity = ""
 		m.refreshView()
 	}
+}
+
+// closeActiveThinking freezes the live reasoning block.
+func (m *Model) closeActiveThinking() {
+	if m.activeThinking < 0 || m.activeThinking >= len(m.blocks) {
+		m.activeThinking = -1
+		return
+	}
+	b := m.blocks[m.activeThinking]
+	if b.kind == blockThinking && !b.finalized {
+		b.finalized = true
+		b.invalidate()
+	}
+	m.activeThinking = -1
 }
 
 // closeActiveAssistant freezes the streaming assistant message so its markdown
@@ -656,11 +696,14 @@ func (m *Model) closeActiveAssistant() {
 		b.invalidate()
 	}
 	m.activeAssistant = -1
+	m.closeActiveThinking()
 }
 
 func (m *Model) invalidateAnimated() {
 	for _, b := range m.blocks {
-		if b.status == statusRunning || (b.kind == blockAssistant && !b.finalized) {
+		if b.status == statusRunning ||
+			(b.kind == blockAssistant && !b.finalized) ||
+			(b.kind == blockThinking && !b.finalized) {
 			b.invalidate()
 		}
 	}

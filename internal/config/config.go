@@ -16,6 +16,16 @@ type Provider struct {
 	EnvKey  string   `json:"env_key,omitempty"`
 	APIKey  string   `json:"-"` // runtime only: never marshaled, never persisted
 	Models  []string `json:"models"`
+	// NativeTools marks whether the endpoint supports OpenAI function calling.
+	// nil/true = native; false = Mihani drives tools via a prompt protocol
+	// (for gateways that strip the tools parameter, e.g. some proxies).
+	NativeTools *bool `json:"native_tools,omitempty"`
+}
+
+// UseNativeTools reports whether tool calls should use the API's function
+// calling rather than the text-based fallback protocol.
+func (p Provider) UseNativeTools() bool {
+	return p.NativeTools == nil || *p.NativeTools
 }
 
 // DefaultDailyBudgetUSD is enforced per provider over a rolling 24 hours.
@@ -73,6 +83,9 @@ func defaults() Config {
 				BaseURL: "https://seekai.cc/v1",
 				APIKey:  secrets.Secondary(),
 				Models:  []string{"claude-opus-5", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5", "gpt-5.6-sol", "grok-4-5"},
+				// This gateway strips the tools parameter, so Mihani drives
+				// file/shell tools through the text protocol instead.
+				NativeTools: boolPtr(false),
 			},
 		},
 	}
@@ -140,6 +153,8 @@ func containsModel(models []string, model string) bool {
 	}
 	return false
 }
+
+func boolPtr(v bool) *bool { return &v }
 
 // LegacyProviderID resolves an id from an earlier release to its current
 // built-in replacement. ok is false for unknown or non-legacy ids.

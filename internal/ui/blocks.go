@@ -16,6 +16,7 @@ const (
 	blockTool
 	blockInfo
 	blockError
+	blockThinking
 )
 
 // Tool statuses.
@@ -67,6 +68,8 @@ func (b *block) render(w int, spinnerChar string) string {
 		b.rendered = b.renderUser(w)
 	case blockAssistant:
 		b.rendered = b.renderAssistant(w, spinnerChar)
+	case blockThinking:
+		b.rendered = b.renderThinking(w, spinnerChar)
 	case blockTool:
 		b.rendered = b.renderTool(w, spinnerChar)
 	case blockInfo:
@@ -110,6 +113,28 @@ func (b *block) renderAssistant(w int, spinnerChar string) string {
 		body = lipgloss.NewStyle().Foreground(colText).Render(wrap(text, w-2))
 	}
 	return indentBlock(body, 2)
+}
+
+// renderThinking shows live model reasoning in a dimmed, clearly secondary
+// block so it never competes with the actual answer.
+func (b *block) renderThinking(w int, spinnerChar string) string {
+	header := lipgloss.NewStyle().Foreground(colFaint).Bold(true).
+		Render("✻ thinking")
+	if !b.finalized && spinnerChar != "" {
+		header += " " + lipgloss.NewStyle().Foreground(colFaint).Render(spinnerChar)
+	}
+	body := lipgloss.NewStyle().Foreground(colFaint).Italic(true).
+		Render(wrap(b.content, w-4))
+	out := header + "\n" + indentBlock(body, 2)
+	const maxThinkingLines = 12
+	lines := strings.Split(out, "\n")
+	if len(lines) > maxThinkingLines {
+		// Keep the head visible while streaming; collapse the middle.
+		shown := append(lines[:6], lines[len(lines)-5:]...)
+		out = strings.Join(shown, "\n") + "\n" +
+			lipgloss.NewStyle().Foreground(colFaint).Render("  … reasoning continues")
+	}
+	return out
 }
 
 var toolStatusStyles = map[string]lipgloss.Style{
