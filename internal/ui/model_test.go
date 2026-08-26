@@ -15,6 +15,7 @@ import (
 
 	"github.com/SSNamahsos/Mihani-Code/internal/agent"
 	"github.com/SSNamahsos/Mihani-Code/internal/config"
+	"github.com/SSNamahsos/Mihani-Code/internal/session"
 	"github.com/SSNamahsos/Mihani-Code/internal/usage"
 )
 
@@ -42,6 +43,8 @@ func newTestModel(width, height int) Model {
 		height:          height,
 		activeAssistant: -1,
 		activeTool:      -1,
+		stickBottom:     true,
+		agent:           &agent.Agent{},
 	}
 }
 
@@ -372,6 +375,142 @@ func TestReasoningStreamsIntoThinkingBlock(t *testing.T) {
 	out := m.blocks[2].render(80, "⠋")
 	if !strings.Contains(out, "thinking") || !strings.Contains(out, "more thoughts") {
 		t.Fatalf("thinking render missing parts: %q", out)
+	}
+}
+
+// Sticky scroll: streaming events must not yank the view while the user is
+// reading higher up; auto-follow resumes only from the bottom.
+func TestStickyScrollKeepsPosition(t *testing.T) {
+	m := newTestModel(100, 40)
+	for i := 0; i < 60; i++ {
+		m.appendBlock(&block{kind: blockInfo, content: fmt.Sprintf("filler line %d", i)})
+	}
+	m.relayout()
+	m.refreshView()
+	if !m.view.AtBottom() {
+		t.Fatal("should start pinned to bottom")
+	}
+
+	m.scrollUp(10)
+	y := m.view.YOffset
+	m.handle(agent.Event{Kind: "activity", Text: "thinking"}) // triggers refreshView
+	if m.view.YOffset != y {
+		t.Fatalf("view jumped during reading: %d -> %d", y, m.view.YOffset)
+	}
+	if m.view.AtBottom() {
+		t.Fatal("should not be at bottom after scrolling up")
+	}
+
+	m.scrollDown(m.height) // return to bottom
+	if !m.stickBottom {
+		t.Fatal("reaching bottom must re-engage follow mode")
+	}
+	m.handle(agent.Event{Kind: "activity", Text: "thinking"})
+	if !m.view.AtBottom() {
+		t.Fatal("follow mode should keep view at bottom")
+	}
+}
+
+// Raw <tool_call> protocol chatter never reaches the transcript.
+func TestStreamSanitizerHidesToolCallBlocks(t *testing.T) {
+	cases := []struct{ raw, wantHidden, wantShown string }{
+		{taggedUI("bash", "dir") + "all done", "<tool_call>", "all done"},
+		{"Working... <tool_call>{\"na", "<tool_call>{\"na", "Working..."},
+		{"```tool_call\n{\"name\":\"x\"}\n```\nresult next", "```tool_call", "result next"},
+	}
+	for _, tc := range cases {
+		clean, _ := sanitizeStream(tc.raw)
+		if strings.Contains(clean, tc.wantHidden) {
+			t.Fatalf("leaked %q in output: %q", tc.wantHidden, clean)
+		}
+		if !strings.Contains(clean, tc.wantShown) {
+			t.Fatalf("lost visible text %q in: %q", tc.wantShown, clean)
+		}
+	}
+}
+
+func taggedUI(name, cmd string) string {
+	return "<tool_call>" + `{"name":"` + name + `","arguments":{"command":"` + cmd + `"}}` + "</tool_call>"
+}
+
+// [ ] opens the action cursor on user messages; r loads text into the
+// composer; f rewinds transcript+history for an alternate path.
+func TestFocusActionsRevertAndFork(t *testing.T) {
+	isolatedUsageHome(t)
+	m := newTestModel(100, 40)
+	m.cfg = config.Config{CurrentProvider: config.BuiltinPrimary, BudgetUSD: -1,
+		Providers: map[string]config.Provider{config.BuiltinPrimary: {Type: "openai", BaseURL: "http://127.0.0.1:1/v1"}}}
+	m.sessionID = session.NewID()
+
+	send := func(prompt string) {
+		m.input.SetValue("")
+		cmd := m.startTurn(prompt)
+		m.cancel()
+		m.finishTurn(resultMsg{})
+		if cmd != nil {
+		}
+	}
+	send("first question")
+	m.handle(agent.Event{Kind: "text", Text: "first answer"})
+	m.closeActiveAssistant()
+	send("second question")
+	m.handle(agent.Event{Kind: "text", Text: "second answer"})
+	m.closeActiveAssistant()
+
+	// Open focus on the newest message via "]".
+	next, _, handled := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	_ = next
+	if !handled || !m.focusActive {
+		t.Fatal("']' should open message focus")
+	}
+	focusedIdx, ok := m.focusedBlockIndex()
+	if !ok || m.blocks[focusedIdx].content != "second question" {
+		t.Fatalf("focus should land on latest prompt, got %#v", focusedIdx)
+	}
+
+	// "[" walks to the older message.
+	m.moveFocus(-1)
+	idx, _ := m.focusedBlockIndex()
+	if m.blocks[idx].content != "first question" {
+		t.Fatalf("moveFocus did not reach first prompt: %#v", m.blocks[idx].content)
+	}
+
+	// revert → composer prefill, transcript untouched.
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if m.focusActive {
+		t.Fatal("revert should close focus")
+	}
+	if !strings.Contains(m.input.Value(), "first question") {
+		t.Fatalf("composer not prefilled: %q", m.input.Value())
+	}
+	if len(m.blocks) != 4 {
+		t.Fatalf("revert must keep transcript, blocks=%d", len(m.blocks))
+	}
+
+	// Rebuild state, then fork from the FIRST message: second exchange gone.
+	m.input.Reset() // focus requires an idle composer
+	m.startTurn("second question")
+	m.cancel()
+	m.finishTurn(resultMsg{})
+	for i := 0; i < 3; i++ { // open on newest, walk back to oldest
+		m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+	}
+	idxBefore, ok := m.focusedBlockIndex()
+	if !ok || m.blocks[idxBefore].content != "first question" {
+		t.Fatalf("expected focus on oldest prompt, got %#v (ok=%v)", idxBefore, ok)
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if len(m.blocks) != 0 {
+		t.Fatalf("fork should drop everything after (and incl.) the prompt, got %d", len(m.blocks))
+	}
+	if !strings.Contains(m.input.Value(), "first question") {
+		t.Fatalf("fork should preload the prompt text: %q", m.input.Value())
+	}
+	hist := m.agent.History()
+	for _, msg := range hist {
+		if s, isStr := msg["content"].(string); isStr && strings.Contains(s, "second question") {
+			t.Fatal("history still contains the forked-away turn")
+		}
 	}
 }
 

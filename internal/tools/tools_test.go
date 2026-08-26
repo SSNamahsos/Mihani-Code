@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,4 +94,47 @@ func TestLimitTruncatesWithoutSplittingRunes(t *testing.T) {
 	if !strings.Contains(got, "(truncated)") {
 		t.Fatalf("expected truncation marker, got %q", got)
 	}
+}
+
+// Large files must be paged with offset/limit instead of hitting a wall.
+func TestReadFileOffsetLimitPaging(t *testing.T) {
+	root := t.TempDir()
+	var sb strings.Builder
+	for i := 1; i <= 300; i++ {
+		fmt.Fprintf(&sb, "line-%d\n", i)
+	}
+	if err := os.WriteFile(filepath.Join(root, "big.txt"), []byte(sb.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+	r := Runner{Root: root}
+
+	got := r.Run(context.Background(), "read_file", map[string]any{"path": "big.txt", "offset": 120, "limit": 5})
+	if !strings.Contains(got, "line-120") || !strings.Contains(got, "line-124") || strings.Contains(got, "line-125\n") {
+		t.Fatalf("window wrong: %q", got)
+	}
+	if !strings.Contains(got, "lines 120-124 of 300") {
+		t.Fatalf("range annotation missing: %q", got)
+	}
+
+	got = r.Run(context.Background(), "read_file", map[string]any{"path": "big.txt", "offset": 400})
+	if !strings.Contains(got, "past the end") {
+		t.Fatalf("expected past-end notice: %q", got)
+	}
+
+	// Whole-file reads announce how to resume after truncation.
+	huge := strings.Repeat("x", 45_000)
+	if err := os.WriteFile(filepath.Join(root, "huge.txt"), []byte(huge), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got = r.Run(context.Background(), "read_file", map[string]any{"path": "huge.txt"})
+	if !strings.Contains(got, `"offset"`) || !strings.Contains(got, "(truncated") {
+		t.Fatalf("truncation should teach pagination: %q", tailOf(got, 160))
+	}
+}
+
+func tailOf(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }

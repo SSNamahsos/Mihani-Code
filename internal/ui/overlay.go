@@ -78,7 +78,7 @@ func (m *Model) selectOverlayItem() {
 		}
 		m.closeOverlay()
 
-	case m.overlay == "Resume session":
+	case m.overlay == "Resume conversation":
 		if m.overlayIndex < len(m.resumeRecords) {
 			record := m.resumeRecords[m.overlayIndex]
 			m.closeOverlay()
@@ -188,7 +188,8 @@ func (m *Model) command(s string) tea.Cmd {
 		}
 		keys := "enter send · ctrl+j newline · tab/shift+tab cycle modes · esc interrupt or clear\n" +
 			"↑↓/pgup/pgdn scroll transcript · ctrl+y or /copy copy last reply\n" +
-			"select any text with the mouse and copy it natively (ctrl+shift+c / right-click)\n" +
+			"[ ] inspect your messages → y copy · f fork from here · r revert to composer\n" +
+			"drag-select any text to copy natively (ctrl+shift+c / right-click)\n" +
 			"ctrl+c cancel request or quit"
 		m.appendBlock(&block{kind: blockInfo, content: "Commands\n" + strings.Join(rows, "\n") + "\n\nKeys\n" + keys})
 
@@ -215,8 +216,24 @@ func (m *Model) command(s string) tea.Cmd {
 			m.appendBlock(&block{kind: blockInfo, content: "no saved sessions found"})
 			return nil
 		}
-		items := make([]overlayItem, 0, len(records))
+		// Conversations from this folder first; other workspaces stay out of
+		// the way but are counted so you know they exist.
+		var here, elsewhere []session.Record
 		for _, r := range records {
+			if r.Workspace == m.root {
+				here = append(here, r)
+			} else {
+				elsewhere = append(elsewhere, r)
+			}
+		}
+		if len(here) == 0 {
+			m.appendBlock(&block{kind: blockInfo,
+				content: fmt.Sprintf("no previous conversations in %s\n(%d session(s) exist in other folders — open those folders to reach them)",
+					shortPath(m.root), len(elsewhere))})
+			return nil
+		}
+		items := make([]overlayItem, 0, len(here))
+		for _, r := range here {
 			title := firstNonEmptyStr(r.Title, "(untitled)")
 			when := r.UpdatedAt.Local().Format("Jan 02 15:04")
 			items = append(items, overlayItem{
@@ -224,8 +241,8 @@ func (m *Model) command(s string) tea.Cmd {
 				detail: fmt.Sprintf("%s · %s/%s", when, m.providerDisplay(r.Provider), r.Model),
 			})
 		}
-		m.resumeRecords = records
-		m.openOverlay("Resume session", items)
+		m.resumeRecords = here
+		m.openOverlay("Resume conversation", items)
 
 	case "/mode":
 		if len(fields) > 1 {

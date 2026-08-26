@@ -191,10 +191,17 @@ func (a *Agent) sendPromptBased(ctx context.Context, p config.Provider, prompt, 
 			// No usable call: if the model attempted one and botched it, tell
 			// it how to fix that; otherwise the turn is complete.
 			if parseErr != nil && !whitespaceOnly.MatchString(content) {
+				hint := "Reply with exactly one <tool_call>{\"name\": ..., \"arguments\": {...}}</tool_call> block."
+				if strings.Contains(content, "node -e") || strings.Contains(content, "python -c") {
+					hint = "Inline scripts with nested quotes break JSON. Instead: use write_file to save a temp .js/.py file, then run it with bash."
+				} else if strings.Count(content, "\\\"") > 0 {
+					hint = "Escape quotes carefully or prefer single quotes inside command strings; simpler commands parse more reliably."
+				}
 				a.history = append(a.history,
 					map[string]any{"role": "assistant", "content": content},
 					map[string]any{"role": "user", "content": fmt.Sprintf(
-						"<tool_result status=\"error\">your tool call could not be parsed: %s. Reply with exactly one <tool_call>{\"name\": ..., \"arguments\": {...}}</tool_call> block.</tool_result>", parseErr)})
+						"<tool_result status=\"error\">your tool call could not be parsed: %s\nYou wrote:\n%s\n%s</tool_result>",
+						parseErr, clip(content, 400), hint)})
 				continue
 			}
 			emit(Event{Kind: "done", Done: true})

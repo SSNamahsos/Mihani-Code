@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -34,7 +35,8 @@ type block struct {
 	content   string // body text (user prompt, assistant reply, diff preview)
 	status    string
 	finalized bool
-	width     int // zero means the cached render is stale
+	focused   bool // user message under the keyboard action cursor
+	width     int  // zero means the cached render is stale
 	rendered  string
 }
 
@@ -91,15 +93,34 @@ func firstLine(s string) string {
 }
 
 func (b *block) renderUser(w int) string {
-	body := wrap(b.content, w-2)
+	body := wrap(b.content, w-6)
 	lines := strings.Split(body, "\n")
-	marker := lipgloss.NewStyle().Bold(true).Foreground(colAccent).Render("❯")
-	out := marker + " " + lipgloss.NewStyle().Foreground(colBright).Render(strings.TrimRight(lines[0], " "))
+	header := lipgloss.NewStyle().Bold(true).Foreground(colAccent).Render("❯ you")
+	var inner strings.Builder
+	inner.WriteString(lipgloss.NewStyle().Foreground(colBright).Render(strings.TrimRight(lines[0], " ")))
 	for _, line := range lines[1:] {
-		out += "\n  " + lipgloss.NewStyle().Foreground(colBright).Render(strings.TrimRight(line, " "))
+		inner.WriteString("\n" + lipgloss.NewStyle().Foreground(colBright).Render(strings.TrimRight(line, " ")))
 	}
-	return out
+	if b.focused {
+		hints := lipgloss.NewStyle().Foreground(colFaint).
+			Render("[y] copy  [f] fork from here  [r] revert to composer  [esc] close")
+		inner.WriteString("\n" + hints)
+	}
+	border := colFaint
+	borderStyle := lipgloss.RoundedBorder()
+	if b.focused {
+		border = colAccent
+	}
+	return lipgloss.NewStyle().
+		Border(borderStyle).
+		BorderForeground(border).
+		Padding(0, 1).
+		Width(maxInt(12, w-2)).
+		Render(header + "\n" + inner.String())
 }
+
+// focused marks the block under the keyboard action cursor.
+func (b *block) focusedBox() bool { return b.focused }
 
 func (b *block) renderAssistant(w int, spinnerChar string) string {
 	var body string
@@ -137,6 +158,54 @@ func (b *block) renderThinking(w int, spinnerChar string) string {
 	return out
 }
 
+// sanitizeStream converts raw streamed model output into display-safe text:
+// complete <tool_call>/<tool_result>-style protocol blocks are removed (they
+// are rendered as their own tool cards), and any trailing partial opener is
+// withheld until more stream arrives.
+func sanitizeStream(raw string) (clean string, cutAt int) {
+	s := completeToolCallRe.ReplaceAllString(raw, "")
+	s = completeFenceRe.ReplaceAllString(s, "")
+
+	cut := len(s)
+	if idx := partialOpener(s, "<tool_call>"); idx >= 0 {
+		cut = idx
+	}
+	if idx := partialOpener(s, "```tool_call"); idx >= 0 && idx < cut {
+		cut = idx
+	}
+	return s[:cut], cut
+}
+
+var (
+	completeToolCallRe = regexp.MustCompile(`(?s)<tool_call>.*?</tool_call>`)
+	completeFenceRe    = regexp.MustCompile("(?s)```tool_call.*?```")
+)
+
+// partialOpener finds where an unterminated opener begins so its tail stays
+// hidden mid-stream; returns -1 when no partial opener is pending.
+func partialOpener(s, opener string) int {
+	start := strings.LastIndex(s, opener)
+	if start >= 0 && !strings.Contains(s[start:], closerFor(opener)) {
+		return start
+	}
+	// Also withhold a bare "<" tail that could be the birth of "<tool_call>".
+	tail := s
+	for width := 1; width < len(opener) && width <= len(tail); width++ {
+		candidate := tail[len(tail)-width:]
+		if strings.HasPrefix(opener, candidate) {
+			return len(tail) - width
+		}
+	}
+	return -1
+}
+
+func closerFor(opener string) string {
+	if opener == "```tool_call" {
+		return "```"
+	}
+	return "</tool_call>"
+}
+
 var toolStatusStyles = map[string]lipgloss.Style{
 	statusDone:   lipgloss.NewStyle().Foreground(colGreen),
 	statusError:  lipgloss.NewStyle().Foreground(colRed),
@@ -170,9 +239,23 @@ func (b *block) renderTool(w int, spinnerChar string) string {
 		out += "  " + detail
 	}
 	if b.content != "" {
-		out += "\n" + colorizeDiff(indentBlock(b.content, 3), w)
+		out += "\n" + colorizeDiff(indentBlock(b.content, 1), w-6)
 	}
-	return out
+	// Tool activity lives in its own bordered card so it reads as a distinct
+	// unit, separate from prose.
+	borderColor := colBorder
+	switch b.status {
+	case statusError:
+		borderColor = colRed
+	case statusDenied:
+		borderColor = colAmber
+	}
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(0, 1).
+		Width(maxInt(14, w-2)).
+		Render(out)
 }
 
 const maxPreviewLines = 14

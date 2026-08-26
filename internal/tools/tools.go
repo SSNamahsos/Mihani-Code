@@ -20,7 +20,11 @@ type Tool struct {
 }
 
 var Registry = []Tool{
-	{Name: "read_file", Description: "Read a text file with line numbers", Schema: objectSchema(map[string]any{"path": stringProperty("Path to the file")}, "path")},
+	{Name: "read_file", Description: "Read a text file; large files can be paged with offset/limit (1-based lines)", Schema: objectSchema(map[string]any{
+		"path":   stringProperty("Path to the file"),
+		"offset": map[string]any{"type": "integer", "description": "1-based line number to start reading from (optional)"},
+		"limit":  map[string]any{"type": "integer", "description": "Maximum number of lines to read (optional)"},
+	}, "path")},
 	{Name: "list_dir", Description: "List files in a directory", Schema: objectSchema(map[string]any{"path": stringProperty("Directory path")}, "")},
 	{Name: "search_files", Description: "Search text in project files", Schema: objectSchema(map[string]any{"pattern": stringProperty("Text to search"), "path": stringProperty("Directory path")}, "pattern")},
 	{Name: "write_file", Description: "Create or overwrite a file", Dangerous: true, Schema: objectSchema(map[string]any{"path": stringProperty("Path to the file"), "content": stringProperty("Complete file content")}, "path", "content")},
@@ -76,7 +80,32 @@ func (r Runner) Run(ctx context.Context, name string, in map[string]any) string 
 		if e != nil {
 			return "ERROR: " + e.Error()
 		}
-		return limit(string(b), 12000)
+		content := string(b)
+		offset := intInput(in, "offset")
+		limit := intInput(in, "limit")
+		if offset > 0 || limit > 0 {
+			lines := strings.Split(strings.TrimRight(normalizeNewlines(content), "\n"), "\n")
+			start := offset
+			if start < 1 {
+				start = 1
+			}
+			if start > len(lines) {
+				return fmt.Sprintf("(file has %d lines; offset %d is past the end)", len(lines), offset)
+			}
+			end := len(lines)
+			if limit > 0 && start-1+limit < end {
+				end = start - 1 + limit
+			}
+			return strings.Join(lines[start-1:end], "\n") + fmt.Sprintf("\n[lines %d-%d of %d]", start, end, len(lines))
+		}
+		const maxReadChars = 40_000
+		if len(content) > maxReadChars {
+			lines := strings.Count(normalizeNewlines(content[:maxReadChars]), "\n")
+			return content[:maxReadChars] +
+				fmt.Sprintf("\n...(truncated at %d chars) — re-read with {\"offset\": %d, \"limit\": 400} to continue from line %d",
+					maxReadChars, lines+1, lines+1)
+		}
+		return content
 	case "list_dir":
 		p := fmt.Sprint(in["path"])
 		if p == "<nil>" || p == "" {
@@ -248,6 +277,29 @@ func applyReplacement(content, old, newv string) (string, int, error) {
 }
 
 func normalizeNewlines(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
+
+// intInput extracts a positive integer argument, tolerating float encodings.
+func intInput(in map[string]any, key string) int {
+	v, ok := in[key]
+	if !ok || v == nil {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		if n < 0 {
+			return 0
+		}
+		return n
+	case string:
+		var parsed int
+		if _, err := fmt.Sscanf(strings.TrimSpace(n), "%d", &parsed); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return 0
+}
 
 // Truncate cuts s to at most n bytes without splitting a UTF-8 rune.
 func Truncate(s string, n int) string {

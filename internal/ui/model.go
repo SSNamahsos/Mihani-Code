@@ -62,9 +62,15 @@ type Model struct {
 	agent *agent.Agent
 
 	blocks          []*block
-	activeAssistant int // index of the assistant block receiving stream deltas
-	activeTool      int // index of the running tool block
-	activeThinking  int // index of the live reasoning block
+	activeAssistant int             // index of the assistant block receiving stream deltas
+	activeTool      int             // index of the running tool block
+	activeThinking  int             // index of the live reasoning block
+	activeRaw       strings.Builder // raw stream buffer for the active assistant
+
+	focusActive bool // keyboard action cursor over user messages
+	focusPos    int  // position within the user-message index list
+
+	stickBottom bool // auto-follow transcript; released when the user scrolls up
 
 	busy   bool
 	queued string
@@ -154,6 +160,7 @@ func New(cfg config.Config, version, resumeID, initialPrompt string) (Model, err
 		activeAssistant: -1,
 		activeTool:      -1,
 		activeThinking:  -1,
+		stickBottom:     true,
 		status:          "ready",
 		sessionID:       session.NewID(),
 		modeIndex:       0,
@@ -259,6 +266,8 @@ func Run(cfg config.Config, version, resumeID, initialPrompt string) error {
 	if err != nil {
 		return err
 	}
+	// Bracketed paste is enabled by default in bubbletea: multiline pastes
+	// arrive as one insert instead of per-line Enter presses.
 	p := tea.NewProgram(&m, tea.WithAltScreen())
 	m.program = p
 	_, runErr := p.Run()
@@ -359,6 +368,29 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 		return m, nil, true
 
+	case m.focusActive:
+		switch key {
+		case "esc", "enter", "q":
+			m.clearFocus()
+		case "[", "k":
+			m.moveFocus(-1)
+		case "]", "j":
+			m.moveFocus(1)
+		case "y", "Y":
+			if idx, ok := m.focusedBlockIndex(); ok {
+				if err := clipboard.WriteAll(m.blocks[idx].content); err != nil {
+					m.notify("Clipboard unavailable: " + err.Error())
+				} else {
+					m.notify("Message copied to clipboard")
+				}
+			}
+		case "r", "R":
+			m.revertToComposer()
+		case "f", "F":
+			m.forkFromMessage()
+		}
+		return m, tick(), true
+
 	case key == "esc":
 		if m.showCommands() {
 			m.input.Reset()
@@ -371,10 +403,10 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 
 	case key == "pgup":
-		m.view.LineUp(m.view.Height / 2)
+		m.scrollUp(m.view.Height / 2)
 		return m, nil, true
 	case key == "pgdown":
-		m.view.LineDown(m.view.Height / 2)
+		m.scrollDown(m.view.Height / 2)
 		return m, nil, true
 
 	// With mouse capture off, terminals deliver the physical wheel as plain
@@ -386,9 +418,9 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			return m, nil, false // palette navigation / multiline cursor keys
 		}
 		if key == "up" {
-			m.view.LineUp(3)
+			m.scrollUp(3)
 		} else {
-			m.view.LineDown(3)
+			m.scrollDown(3)
 		}
 		return m, nil, true
 
@@ -402,6 +434,13 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.input.InsertString("\n")
 		m.resizeComposer()
 		return m, nil, true
+
+	case key == "[", key == "]":
+		if !m.showCommands() && strings.TrimSpace(m.input.Value()) == "" {
+			m.startFocus()
+			return m, tick(), true
+		}
+		return m, nil, false
 
 	case m.showCommands():
 		items := m.filteredCommands()
@@ -508,6 +547,20 @@ func (m *Model) budgetBlock() string {
 		m.spend, budget, when)
 }
 
+// scrollUp pins the transcript to its position: new output will no longer
+// auto-follow until the user scrolls back to the bottom.
+func (m *Model) scrollUp(n int) {
+	m.view.LineUp(n)
+	m.stickBottom = false
+}
+
+func (m *Model) scrollDown(n int) {
+	m.view.LineDown(n)
+	if m.view.AtBottom() {
+		m.stickBottom = true
+	}
+}
+
 // copyLastReply puts the most recent assistant message on the clipboard and
 // raises a confirmation toast. Returns a tea.Cmd so the toast renders.
 func (m *Model) copyLastReply() tea.Cmd {
@@ -528,6 +581,144 @@ func (m *Model) copyLastReply() tea.Cmd {
 	return tick()
 }
 
+// userMsgIndexes lists transcript positions of user messages, oldest first.
+func (m *Model) userMsgIndexes() []int {
+	var out []int
+	for i, b := range m.blocks {
+		if b.kind == blockUser {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func (m *Model) startFocus() {
+	idx := m.userMsgIndexes()
+	if len(idx) == 0 {
+		m.notify("No messages to inspect yet")
+		return
+	}
+	m.setFocus(idx[len(idx)-1])
+}
+
+func (m *Model) setFocus(blockIdx int) {
+	m.clearFocusFlags()
+	m.focusActive = true
+	m.focusPos = blockIdx
+	m.blocks[blockIdx].focused = true
+	m.blocks[blockIdx].invalidate()
+	m.refreshView()
+}
+
+func (m *Model) clearFocusFlags() {
+	for _, b := range m.blocks {
+		if b.focused {
+			b.focused = false
+			b.invalidate()
+		}
+	}
+}
+
+func (m *Model) clearFocus() {
+	m.clearFocusFlags()
+	m.focusActive = false
+	m.focusPos = 0
+	m.refreshView()
+}
+
+func (m *Model) moveFocus(delta int) {
+	users := m.userMsgIndexes()
+	if len(users) == 0 {
+		return
+	}
+	pos := 0
+	for i, bi := range users {
+		if bi == m.focusPos {
+			pos = i
+			break
+		}
+	}
+	next := pos + delta
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(users) {
+		next = len(users) - 1
+	}
+	m.setFocus(users[next])
+}
+
+func (m *Model) focusedBlockIndex() (int, bool) {
+	if !m.focusActive || m.focusPos >= len(m.blocks) || !m.blocks[m.focusPos].focused {
+		return 0, false
+	}
+	return m.focusPos, true
+}
+
+// revertToComposer loads the focused prompt back into the editor for a resend.
+func (m *Model) revertToComposer() {
+	idx, ok := m.focusedBlockIndex()
+	if !ok {
+		return
+	}
+	text := m.blocks[idx].content
+	m.clearFocus()
+	m.input.Reset()
+	m.input.SetValue(text)
+	m.resizeComposer()
+	m.notify("Loaded into composer — edit and press enter to resend")
+}
+
+// forkFromMessage rewinds the conversation to just before the focused prompt:
+// later transcript and history are dropped, and the text returns to the
+// composer so an alternate path can be taken.
+func (m *Model) forkFromMessage() {
+	idx, ok := m.focusedBlockIndex()
+	if !ok {
+		return
+	}
+	text := m.blocks[idx].content
+
+	ordinal := 0 // which user message (1-based) this block represents
+	for i := 0; i <= idx && i < len(m.blocks); i++ {
+		if m.blocks[i].kind == blockUser {
+			ordinal++
+		}
+	}
+	seen := 0
+	cut := len(m.agent.History())
+	for h, msg := range m.agent.History() {
+		if fmt.Sprint(msg["role"]) != "user" {
+			continue
+		}
+		if _, isText := msg["content"].(string); !isText {
+			continue // tool_result batches are not real prompts
+		}
+		seen++
+		if seen == ordinal {
+			cut = h
+			break
+		}
+	}
+
+	history := m.agent.History()
+	if cut <= len(history) {
+		m.agent.Restore(history[:cut])
+	}
+	m.blocks = append([]*block{}, m.blocks[:idx]...)
+	m.activeAssistant, m.activeTool, m.activeThinking = -1, -1, -1
+	m.activeRaw.Reset()
+	m.stickBottom = true
+
+	m.clearFocus()
+	m.input.Reset()
+	m.input.SetValue(text)
+	m.resizeComposer()
+	m.saveSession()
+	m.relayout()
+	m.notify("Forked — earlier context kept, edit and resend")
+}
+
 func (m *Model) submit(s string) tea.Cmd {
 	if strings.HasPrefix(s, "/") {
 		return m.command(s)
@@ -543,6 +734,7 @@ func (m *Model) startTurn(prompt string) tea.Cmd {
 	}
 	m.closeActiveAssistant()
 	m.blocks = append(m.blocks, &block{kind: blockUser, content: prompt})
+	m.stickBottom = true
 	m.busy = true
 	m.approveAll = false
 	m.status = "working"
@@ -636,9 +828,12 @@ func (m *Model) handle(e agent.Event) {
 		if m.activeAssistant < 0 {
 			m.blocks = append(m.blocks, &block{kind: blockAssistant})
 			m.activeAssistant = len(m.blocks) - 1
+			m.activeRaw.Reset()
 		}
+		m.activeRaw.WriteString(e.Text)
+		clean, _ := sanitizeStream(m.activeRaw.String())
 		b := m.blocks[m.activeAssistant]
-		b.content += e.Text
+		b.content = clean
 		b.invalidate()
 		m.refreshView()
 
@@ -745,10 +940,15 @@ func (m *Model) closeActiveAssistant() {
 		return
 	}
 	b := m.blocks[m.activeAssistant]
-	if b.kind == blockAssistant && !b.finalized && strings.TrimSpace(b.content) != "" {
-		b.finalized = true
+	if b.kind == blockAssistant && !b.finalized {
+		clean, _ := sanitizeStream(m.activeRaw.String())
+		b.content = clean
+		if strings.TrimSpace(b.content) != "" {
+			b.finalized = true
+		}
 		b.invalidate()
 	}
+	m.activeRaw.Reset()
 	m.activeAssistant = -1
 	m.closeActiveThinking()
 }
@@ -791,7 +991,9 @@ func (m *Model) refreshView() {
 		prevKind = b.kind
 	}
 	m.view.SetContent(strings.Join(rendered, "\n"))
-	m.view.GotoBottom()
+	if m.stickBottom {
+		m.view.GotoBottom()
+	}
 }
 
 func (m *Model) spinnerGlyph() string {

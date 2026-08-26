@@ -256,8 +256,8 @@ func (m *Model) welcome() string {
 	keys := []string{
 		lipgloss.NewStyle().Foreground(colText).Render("/ commands") + lipgloss.NewStyle().Foreground(colFaint).Render("   browse everything mihani can do"),
 		lipgloss.NewStyle().Foreground(colText).Render("tab modes") + lipgloss.NewStyle().Foreground(colFaint).Render("     build, plan, research, or ask"),
-		lipgloss.NewStyle().Foreground(colText).Render("↑↓ / pgup") + lipgloss.NewStyle().Foreground(colFaint).Render("    scroll history · select text freely with the mouse"),
-		lipgloss.NewStyle().Foreground(colText).Render("ctrl+y copy") + lipgloss.NewStyle().Foreground(colFaint).Render("   copies mihani's last reply, with a confirmation toast"),
+		lipgloss.NewStyle().Foreground(colText).Render("[ ] inspect") + lipgloss.NewStyle().Foreground(colFaint).Render("   jump between your messages: y copy · f fork · r revert"),
+		lipgloss.NewStyle().Foreground(colText).Render("↑↓ / pgup") + lipgloss.NewStyle().Foreground(colFaint).Render("    scroll history · drag to select and copy any text"),
 	}
 
 	examples := []string{
