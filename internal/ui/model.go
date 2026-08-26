@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -36,6 +37,7 @@ var commands = []commandItem{
 	{name: "/clear", description: "Clear the visible conversation"},
 	{name: "/new", description: "Start a new session"},
 	{name: "/resume", description: "Resume a previous session"},
+	{name: "/copy", description: "Copy Mihani's last reply to the clipboard"},
 	{name: "/mode", description: "Switch between build, plan, research, and ask"},
 	{name: "/providers", description: "Show configured AI providers"},
 	{name: "/models", description: "Show models for the active provider"},
@@ -102,7 +104,24 @@ type Model struct {
 	commandIndex int
 	quitting     bool
 
-	spend float64 // rolling 24h spend for the current provider
+	spend      float64 // rolling 24h spend for the current provider
+	toast      string  // transient notification shown in the status bar
+	toastUntil time.Time
+	toastTTL   time.Duration // test hook; zero means defaultToastTTL
+}
+
+const defaultToastTTL = 2500 * time.Millisecond
+
+func (m *Model) notify(msg string) {
+	m.toast = msg
+	m.toastUntil = time.Now().Add(m.toastTTLor())
+}
+
+func (m *Model) toastTTLor() time.Duration {
+	if m.toastTTL > 0 {
+		return m.toastTTL
+	}
+	return defaultToastTTL
 }
 
 // New builds the TUI model. resumeID optionally restores a specific session;
@@ -232,13 +251,15 @@ func shortID(id string) string {
 	return id
 }
 
-// Run starts the interactive TUI.
+// Run starts the interactive TUI. Mouse capture is deliberately OFF so native
+// text selection works everywhere; terminal emulators translate the physical
+// wheel into up/down keypresses in alternate-screen mode, which scroll here.
 func Run(cfg config.Config, version, resumeID, initialPrompt string) error {
 	m, err := New(cfg, version, resumeID, initialPrompt)
 	if err != nil {
 		return err
 	}
-	p := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(&m, tea.WithAltScreen())
 	m.program = p
 	_, runErr := p.Run()
 	m.agent.Close()
@@ -264,23 +285,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return next, cmd
 		}
 
-	case tea.MouseMsg:
-		if x.Action == tea.MouseActionPress {
-			switch x.Button {
-			case tea.MouseButtonWheelUp:
-				m.view.LineUp(3)
-				return m, nil
-			case tea.MouseButtonWheelDown:
-				m.view.LineDown(3)
-				return m, nil
-			}
-		}
-
 	case eventMsg:
 		m.handle(agent.Event(x))
 
 	case tickMsg:
-		if m.busy || m.pendingApproval != nil {
+		if !m.toastUntil.IsZero() && !time.Now().Before(m.toastUntil) {
+			m.toast = ""
+			m.toastUntil = time.Time{}
+		}
+		if m.busy || m.pendingApproval != nil || m.toast != "" {
 			m.spinner++
 			m.invalidateAnimated()
 			m.refreshView()
@@ -362,6 +375,27 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	case key == "pgdown":
 		m.view.LineDown(m.view.Height / 2)
+		return m, nil, true
+
+	// With mouse capture off, terminals deliver the physical wheel as plain
+	// up/down keypresses. In a single-line composer those keys are free, so
+	// they scroll the transcript; a grown (multiline) composer keeps them for
+	// cursor movement instead.
+	case key == "up", key == "down":
+		if m.showCommands() || m.input.Height() > 1 {
+			return m, nil, false // palette navigation / multiline cursor keys
+		}
+		if key == "up" {
+			m.view.LineUp(3)
+		} else {
+			m.view.LineDown(3)
+		}
+		return m, nil, true
+
+	case key == "ctrl+y":
+		if cmd := m.copyLastReply(); cmd != nil {
+			return m, cmd, true
+		}
 		return m, nil, true
 
 	case key == "ctrl+j", key == "alt+enter", key == "shift+enter":
@@ -472,6 +506,26 @@ func (m *Model) budgetBlock() string {
 		"Mihani daily limit reached: $%.2f of $%.2f used in the last 24h. "+
 			"Budget resets in %s — switch provider with /providers, use a free model, or raise budget_usd in settings.",
 		m.spend, budget, when)
+}
+
+// copyLastReply puts the most recent assistant message on the clipboard and
+// raises a confirmation toast. Returns a tea.Cmd so the toast renders.
+func (m *Model) copyLastReply() tea.Cmd {
+	for i := len(m.blocks) - 1; i >= 0; i-- {
+		b := m.blocks[i]
+		if b.kind != blockAssistant || strings.TrimSpace(b.content) == "" {
+			continue
+		}
+		if err := clipboard.WriteAll(b.content); err != nil {
+			m.notify("Clipboard unavailable: " + err.Error())
+			return tick()
+		}
+		lines := strings.Count(strings.TrimSpace(b.content), "\n") + 1
+		m.notify(fmt.Sprintf("Copied last reply (%d lines) to clipboard", lines))
+		return tick()
+	}
+	m.notify("No reply to copy yet")
+	return tick()
 }
 
 func (m *Model) submit(s string) tea.Cmd {

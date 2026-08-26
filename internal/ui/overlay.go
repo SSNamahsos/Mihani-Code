@@ -187,7 +187,9 @@ func (m *Model) command(s string) tea.Cmd {
 			rows = append(rows, fmt.Sprintf("%-11s %s", item.name, item.description))
 		}
 		keys := "enter send · ctrl+j newline · tab/shift+tab cycle modes · esc interrupt or clear\n" +
-			"pgup/pgdn scroll transcript · ctrl+c cancel request or quit"
+			"↑↓/pgup/pgdn scroll transcript · ctrl+y or /copy copy last reply\n" +
+			"select any text with the mouse and copy it natively (ctrl+shift+c / right-click)\n" +
+			"ctrl+c cancel request or quit"
 		m.appendBlock(&block{kind: blockInfo, content: "Commands\n" + strings.Join(rows, "\n") + "\n\nKeys\n" + keys})
 
 	case "/clear":
@@ -337,6 +339,11 @@ func (m *Model) command(s string) tea.Cmd {
 			return nil
 		}
 		m.appendBlock(&block{kind: blockInfo, content: result})
+
+	case "/copy":
+		if cmd := m.copyLastReply(); cmd != nil {
+			return cmd
+		}
 
 	case "/settings":
 		m.openOverlay("Settings", m.settingsItems())

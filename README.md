@@ -95,7 +95,9 @@ mihani --version
 | `ctrl+j` / `alt+enter` | newline inside the composer |
 | `/` … | type to filter the command palette |
 | `tab` / `shift+tab` | cycle modes (navigate the palette when it is open) |
-| `mouse wheel` / `pgup` / `pgdn` | scroll the transcript (hold `shift` and drag to select text for copying) |
+| `↑` / `↓` / `mouse wheel` / `pgup` / `pgdn` | scroll the transcript (arrows stay in the composer while it is multiline) |
+| *select with mouse* | plain drag selects text anywhere — copy natively via right-click or `ctrl+shift+c` |
+| `ctrl+y` or `/copy` | copy Mihani's last reply to the clipboard — shows a "✓ Copied" toast in the status bar |
 | `esc` | interrupt the current request, clear input, close overlays |
 | `ctrl+c` | cancel request → deny pending approval → quit |
 

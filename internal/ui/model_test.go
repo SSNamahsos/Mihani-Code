@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -374,7 +375,9 @@ func TestReasoningStreamsIntoThinkingBlock(t *testing.T) {
 	}
 }
 
-func TestMouseWheelScrollsTranscript(t *testing.T) {
+// With mouse capture off the wheel arrives as up/down keypresses; a
+// single-line composer routes them to transcript scrolling.
+func TestArrowKeysScrollTranscript(t *testing.T) {
 	m := newTestModel(100, 40)
 	for i := 0; i < 50; i++ {
 		m.appendBlock(&block{kind: blockInfo, content: fmt.Sprintf("line %d of filler transcript text", i)})
@@ -383,16 +386,82 @@ func TestMouseWheelScrollsTranscript(t *testing.T) {
 	m.refreshView()
 	bottom := m.view.YOffset
 
-	next, _ := m.Update(tea.MouseMsg{X: 5, Y: 5, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	next, _, handled := m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
 	_ = next
-	if m.view.YOffset >= bottom {
-		t.Fatalf("wheel-up did not scroll up: y=%d bottom=%d", m.view.YOffset, bottom)
+	if !handled || m.view.YOffset >= bottom {
+		t.Fatalf("up did not scroll up: y=%d bottom=%d handled=%v", m.view.YOffset, bottom, handled)
 	}
 	before := m.view.YOffset
-	next, _ = m.Update(tea.MouseMsg{X: 5, Y: 5, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	next, _, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
 	_ = next
 	if m.view.YOffset <= before {
-		t.Fatalf("wheel-down did not scroll down: y=%d before=%d", m.view.YOffset, before)
+		t.Fatalf("down did not scroll down: y=%d before=%d", m.view.YOffset, before)
+	}
+}
+
+// A multiline composer keeps the arrows for cursor movement instead.
+func TestArrowsStayInMultilineComposer(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.input.SetValue("line one\nline two")
+	m.resizeComposer()
+	if m.input.Height() < 2 {
+		t.Fatalf("composer should be multiline, height=%d", m.input.Height())
+	}
+	for i := 0; i < 30; i++ {
+		m.appendBlock(&block{kind: blockInfo, content: "filler"})
+	}
+	m.relayout()
+	m.refreshView()
+	y := m.view.YOffset
+
+	_, _, handled := m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if handled {
+		t.Fatal("multiline composer must not swallow up/down")
+	}
+	if m.view.YOffset != y {
+		t.Fatalf("transcript scrolled while composing multiline: %d -> %d", y, m.view.YOffset)
+	}
+}
+
+func TestCtrlYCopiesLastReplyWithToast(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.toastTTL = 50 * time.Millisecond
+	m.appendBlock(&block{kind: blockUser, content: "question"})
+	m.appendBlock(&block{kind: blockAssistant, content: "the answer text", finalized: true})
+
+	_, cmd, handled := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlY})
+	if !handled || cmd == nil {
+		t.Fatalf("ctrl+y mishandled: handled=%v cmd=%v", handled, cmd)
+	}
+	if !strings.Contains(m.toast, "Copied last reply") {
+		t.Fatalf("expected copy toast, got %q", m.toast)
+	}
+	if content, err := clipboard.ReadAll(); err == nil && !strings.Contains(content, "the answer text") {
+		t.Fatalf("clipboard does not hold the reply: %q", content)
+	}
+
+	// While the toast is live, ticks keep the animation loop scheduled.
+	if _, cmd := m.Update(tickMsg(time.Now())); cmd == nil {
+		t.Fatal("tick should reschedule while a toast is visible")
+	}
+
+	// Once expired, the toast clears and the tick loop stops.
+	time.Sleep(60 * time.Millisecond)
+	next, tickCmd := m.Update(tickMsg(time.Now()))
+	_ = next
+	if tickCmd != nil {
+		t.Fatal("expired toast should not keep the tick loop alive")
+	}
+	if m.toast != "" {
+		t.Fatalf("toast should have expired, got %q", m.toast)
+	}
+}
+
+func TestCtrlYWithoutRepliesNotifies(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlY})
+	if !strings.Contains(m.toast, "No reply to copy") {
+		t.Fatalf("expected empty-history notice, got %q", m.toast)
 	}
 }
 

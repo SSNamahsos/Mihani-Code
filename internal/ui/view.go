@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -117,6 +118,9 @@ func (m *Model) composerBox() string {
 func (m *Model) statusRow() string {
 	var left string
 	switch {
+	case !m.toastUntil.IsZero() && time.Now().Before(m.toastUntil):
+		left = lipgloss.NewStyle().Foreground(colGreen).Bold(true).
+			Render("✓ " + m.toast)
 	case m.pendingApproval != nil:
 		left = lipgloss.NewStyle().Foreground(colAmber).Render(
 			fmt.Sprintf("%s approve %s? [y]es [n]o [a]lways", m.spinnerGlyph(), m.approvalTool))
@@ -131,7 +135,7 @@ func (m *Model) statusRow() string {
 		left = lipgloss.NewStyle().Foreground(colCyan).Render("… message queued")
 	default:
 		left = lipgloss.NewStyle().Foreground(colFaint).
-			Render("/ commands · tab mode · wheel/pgup scroll · ctrl+c quit")
+			Render("/ commands · tab mode · ↑↓/pgup scroll · ctrl+y copy reply · ctrl+c quit")
 	}
 	window := m.cfg.ContextWindow
 	if window <= 0 {
@@ -252,8 +256,8 @@ func (m *Model) welcome() string {
 	keys := []string{
 		lipgloss.NewStyle().Foreground(colText).Render("/ commands") + lipgloss.NewStyle().Foreground(colFaint).Render("   browse everything mihani can do"),
 		lipgloss.NewStyle().Foreground(colText).Render("tab modes") + lipgloss.NewStyle().Foreground(colFaint).Render("     build, plan, research, or ask"),
-		lipgloss.NewStyle().Foreground(colText).Render("wheel scroll") + lipgloss.NewStyle().Foreground(colFaint).Render("    mouse wheel or pgup/pgdn for history (shift+drag to select)"),
-		lipgloss.NewStyle().Foreground(colText).Render("enter send") + lipgloss.NewStyle().Foreground(colFaint).Render("     queue more messages while working"),
+		lipgloss.NewStyle().Foreground(colText).Render("↑↓ / pgup") + lipgloss.NewStyle().Foreground(colFaint).Render("    scroll history · select text freely with the mouse"),
+		lipgloss.NewStyle().Foreground(colText).Render("ctrl+y copy") + lipgloss.NewStyle().Foreground(colFaint).Render("   copies mihani's last reply, with a confirmation toast"),
 	}
 
 	examples := []string{
