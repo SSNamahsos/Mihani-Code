@@ -436,9 +436,10 @@ func (m *Model) refreshSpend() {
 }
 
 // budgetBlock returns a user-facing message when the daily cap is exhausted,
-// or "" when the turn may proceed.
+// or "" when the turn may proceed. Only built-in Mihani providers are capped;
+// user-connected providers run on their own credentials.
 func (m *Model) budgetBlock() string {
-	budget := m.cfg.Budget()
+	budget := m.cfg.BudgetEnforced(m.cfg.CurrentProvider)
 	if budget <= 0 {
 		return ""
 	}

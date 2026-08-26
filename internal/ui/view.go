@@ -152,8 +152,10 @@ func (m *Model) statusRow() string {
 }
 
 // spendLabel renders the live daily budget meter for the active provider.
+// It appears only while using built-in Mihani endpoints — custom providers
+// are not subject to the shared credit cap.
 func (m *Model) spendLabel() string {
-	budget := m.cfg.Budget()
+	budget := m.cfg.BudgetEnforced(m.cfg.CurrentProvider)
 	if budget <= 0 {
 		return ""
 	}

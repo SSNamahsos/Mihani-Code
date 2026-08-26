@@ -147,7 +147,8 @@ $0.42/$10.00 · ~/myproject · 12.4k tokens (6%) · ready
 ```
 
 - Spend is tracked per provider over a rolling 24-hour window (`~/.mihani/usage.json`)
-- When a provider reaches its budget, new turns are refused until the oldest usage falls out of the window; the message tells you exactly when
+- **The cap applies only to the built-in Mihani endpoints** (`mihani`, `mihani-pro`) — those share your embedded credit. Providers added via `/connect` use their own credentials and are never capped or metered against this budget.
+- When a built-in endpoint reaches its budget, new turns are refused until the oldest usage falls out of the window; the message tells you exactly when
 - The cap defaults to `$10.00`; change or disable it in `config.json`:
 
 ```json

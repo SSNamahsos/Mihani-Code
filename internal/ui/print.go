@@ -21,7 +21,7 @@ func RunPrint(cfg config.Config, prompt string) error {
 	if err != nil {
 		return err
 	}
-	if budget := cfg.Budget(); budget > 0 {
+	if budget := cfg.BudgetEnforced(cfg.CurrentProvider); budget > 0 {
 		if spend := usage.WindowSum(cfg.CurrentProvider); spend >= budget {
 			return fmt.Errorf("Mihani daily limit reached: $%.2f of $%.2f used in the last 24h",
 				spend, budget)

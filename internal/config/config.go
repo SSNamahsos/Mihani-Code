@@ -187,3 +187,19 @@ func (c Config) Budget() float64 {
 	}
 	return c.BudgetUSD
 }
+
+// IsBuiltinProvider reports whether a provider id is one of the shipped
+// Mihani endpoints. The daily credit budget applies only to these — user-added
+// providers run on their own credentials and are never capped here.
+func (c Config) IsBuiltinProvider(name string) bool {
+	return name == BuiltinPrimary || name == BuiltinSecondary
+}
+
+// BudgetEnforced returns the daily cap for the active provider, or 0 when no
+// cap applies (non-built-in providers, or budgeting disabled).
+func (c Config) BudgetEnforced(current string) float64 {
+	if !c.IsBuiltinProvider(current) {
+		return 0
+	}
+	return c.Budget()
+}

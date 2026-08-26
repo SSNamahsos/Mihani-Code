@@ -366,14 +366,45 @@ func isolatedUsageHome(t *testing.T) {
 	t.Cleanup(func() { usage.Reset() })
 }
 
+// A custom /connect provider must bypass the shared credit cap entirely.
+func TestBudgetDoesNotGateCustomProviders(t *testing.T) {
+	isolatedUsageHome(t)
+	usage.Add(usage.Entry{Provider: "my-own", CostUSD: 99.00, Time: time.Now()})
+
+	m := Model{
+		cfg: config.Config{
+			CurrentProvider: "my-own", CurrentModel: "whatever", BudgetUSD: 10,
+			Providers: map[string]config.Provider{"my-own": {Type: "openai", BaseURL: "http://127.0.0.1:1/v1"}},
+		},
+		input:           newInput(""),
+		activeAssistant: -1,
+		activeTool:      -1,
+		view:            viewport.New(80, 20),
+		width:           100,
+		height:          40,
+	}
+	m.refreshSpend()
+
+	if msg := m.budgetBlock(); msg != "" {
+		t.Fatalf("custom provider should never be capped, got %q", msg)
+	}
+	if label := m.spendLabel(); label != "" {
+		t.Fatalf("spend meter should hide for custom providers, got %q", label)
+	}
+	if cmd := m.startTurn("hello"); cmd == nil {
+		t.Fatal("turn on custom provider should start even far over the built-in budget")
+	}
+	m.cancel()
+}
+
 // The daily cap must refuse to start new turns once the rolling 24h spend
 // reaches the budget for the active provider.
 func TestBudgetBlocksNewTurns(t *testing.T) {
 	isolatedUsageHome(t)
-	usage.Add(usage.Entry{Provider: "hcnsec", CostUSD: 10.00, Time: time.Now()})
+	usage.Add(usage.Entry{Provider: config.BuiltinPrimary, CostUSD: 10.00, Time: time.Now()})
 
 	m := Model{
-		cfg:             config.Config{CurrentProvider: "hcnsec", CurrentModel: "glm-5.3", BudgetUSD: 10},
+		cfg:             config.Config{CurrentProvider: config.BuiltinPrimary, CurrentModel: "glm-5.3", BudgetUSD: 10},
 		input:           newInput(""),
 		activeAssistant: -1,
 		activeTool:      -1,
@@ -398,12 +429,12 @@ func TestBudgetBlocksNewTurns(t *testing.T) {
 
 func TestBudgetAllowsUnderCap(t *testing.T) {
 	isolatedUsageHome(t)
-	usage.Add(usage.Entry{Provider: "hcnsec", CostUSD: 0.50, Time: time.Now()})
+	usage.Add(usage.Entry{Provider: config.BuiltinPrimary, CostUSD: 0.50, Time: time.Now()})
 
 	m := Model{
 		cfg: config.Config{
-			CurrentProvider: "hcnsec", CurrentModel: "glm-5.3", BudgetUSD: 10,
-			Providers: map[string]config.Provider{"hcnsec": {Type: "openai", BaseURL: "http://127.0.0.1:1/v1"}},
+			CurrentProvider: config.BuiltinPrimary, CurrentModel: "glm-5.3", BudgetUSD: 10,
+			Providers: map[string]config.Provider{config.BuiltinPrimary: {Type: "openai", BaseURL: "http://127.0.0.1:1/v1"}},
 		},
 		input:           newInput(""),
 		activeAssistant: -1,
@@ -431,7 +462,7 @@ func TestBudgetAllowsUnderCap(t *testing.T) {
 func TestUsageEventRecordsSpend(t *testing.T) {
 	isolatedUsageHome(t)
 	m := Model{
-		cfg:             config.Config{CurrentProvider: "seekai", CurrentModel: "claude-opus-5", BudgetUSD: 10},
+		cfg:             config.Config{CurrentProvider: config.BuiltinSecondary, CurrentModel: "claude-opus-5", BudgetUSD: 10},
 		activeAssistant: -1,
 		activeTool:      -1,
 		view:            viewport.New(80, 20),
@@ -440,7 +471,7 @@ func TestUsageEventRecordsSpend(t *testing.T) {
 	}
 	m.handle(agent.Event{Kind: "usage", Tokens: 1500, InputTok: 1000, OutputTok: 500, CostUSD: 0.42})
 	m.handle(agent.Event{Kind: "usage", Tokens: 3000, InputTok: 2000, OutputTok: 1000, CostUSD: 0.58})
-	if got := usage.WindowSum("seekai"); math.Abs(got-1.00) > 1e-9 {
+	if got := usage.WindowSum(config.BuiltinSecondary); math.Abs(got-1.00) > 1e-9 {
 		t.Fatalf("recorded spend = %v, want 1.00", got)
 	}
 	if m.spend < 1.00-1e-9 {

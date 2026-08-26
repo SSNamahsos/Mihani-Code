@@ -366,12 +366,18 @@ func (m *Model) settingsItems() []overlayItem {
 	if !reset.IsZero() {
 		resetLabel = time.Until(reset).Round(time.Minute).String()
 	}
+	builtin := m.cfg.IsBuiltinProvider(m.cfg.CurrentProvider)
+	used := "$0.00"
+	if builtin {
+		used = fmt.Sprintf("$%.2f · oldest entry clears in %s", m.spend, resetLabel)
+	} else {
+		used = fmt.Sprintf("$%.2f tracked — not capped (your own credentials)", m.spend)
+	}
 	return []overlayItem{
 		{label: "Auto confirm", detail: auto + "  (enter toggles)"},
 		{label: "Reset usage window", detail: "clear today's spend record  (enter resets)"},
-		{label: "Daily budget", detail: fmt.Sprintf("$%.2f per provider per 24h", m.cfg.Budget())},
-		{label: "Used (24h)", detail: fmt.Sprintf("$%.2f · oldest entry clears in %s",
-			m.spend, resetLabel)},
+		{label: "Daily budget", detail: fmt.Sprintf("$%.2f on Mihani built-in endpoints only", m.cfg.Budget())},
+		{label: "Used (24h)", detail: used},
 		{label: "Max iterations", detail: fmt.Sprintf("%d tool loops per turn", effectiveIterations(m.cfg))},
 		{label: "Context window", detail: fmt.Sprintf("%d tokens", m.cfg.ContextWindow)},
 		{label: "Max output tokens", detail: fmt.Sprint(m.cfg.MaxTokens)},

@@ -156,3 +156,21 @@ func TestBudgetZeroMeansDefaultAndNegativeDisables(t *testing.T) {
 		t.Fatal("negative budget should disable enforcement")
 	}
 }
+
+// The shared $10 credit belongs to the embedded keys: only built-in Mihani
+// endpoints are capped; user-connected providers are never throttled.
+func TestBudgetEnforcedOnlyForBuiltins(t *testing.T) {
+	cfg := defaults()
+	if !cfg.IsBuiltinProvider(BuiltinPrimary) || !cfg.IsBuiltinProvider(BuiltinSecondary) {
+		t.Fatal("built-in ids not recognized")
+	}
+	if cfg.IsBuiltinProvider("my-own-provider") {
+		t.Fatal("custom provider must not count as built-in")
+	}
+	if got := cfg.BudgetEnforced(BuiltinPrimary); got != DefaultDailyBudgetUSD {
+		t.Fatalf("built-in should be capped at default, got %v", got)
+	}
+	if got := cfg.BudgetEnforced("my-own-provider"); got != 0 {
+		t.Fatalf("custom provider should have no cap, got %v", got)
+	}
+}
