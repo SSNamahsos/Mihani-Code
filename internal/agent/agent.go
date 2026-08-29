@@ -38,6 +38,7 @@ type Event struct {
 	Iteration  int
 	Done       bool
 	Approval   chan bool
+	Answer     chan string // ask_user: UI delivers the user's answer over this channel
 }
 
 type Agent struct {
@@ -436,6 +437,9 @@ const historyToolLimit = 6000
 
 func (a *Agent) runTool(ctx context.Context, name string, input map[string]any, id string, approve func(string, map[string]any) bool, emit func(Event)) (string, error) {
 	emit(Event{Kind: "tool_start", Tool: name, Input: input, ToolCallID: id})
+	if name == "ask_user" {
+		return a.askUser(ctx, input, emit)
+	}
 	definition := tools.Lookup(name)
 	if preview := tools.Preview(name, input, a.Root); preview != "" {
 		emit(Event{Kind: "tool_preview", Tool: name, ToolResult: secrets.Redact(preview), ToolCallID: id})
@@ -470,6 +474,24 @@ func (a *Agent) runTool(ctx context.Context, name string, input map[string]any, 
 	result = secrets.Redact(result)
 	emit(Event{Kind: "tool_done", Tool: name, ToolResult: result, ToolCallID: id, Input: input})
 	return result, nil
+}
+
+// askUser pauses the agent loop and hands the question to the UI, which
+// renders an answer menu. The user's choice is returned as the tool result so
+// the model can continue the same turn (and ask again if it needs to).
+func (a *Agent) askUser(ctx context.Context, input map[string]any, emit func(Event)) (string, error) {
+	question, _ := input["question"].(string)
+	if strings.TrimSpace(question) == "" {
+		return "ERROR: ask_user requires a non-empty question", nil
+	}
+	answer := make(chan string, 1)
+	emit(Event{Kind: "ask", Text: question, Input: input, Answer: answer})
+	select {
+	case a := <-answer:
+		return "User answered: " + a, nil
+	case <-ctx.Done():
+		return "ERROR: the user cancelled the question; do not ask it again this turn", nil
+	}
 }
 
 // compactHistory trims the oldest stored tool outputs once the raw history

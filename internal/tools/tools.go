@@ -29,7 +29,11 @@ var Registry = []Tool{
 	{Name: "search_files", Description: "Search text in project files", Schema: objectSchema(map[string]any{"pattern": stringProperty("Text to search"), "path": stringProperty("Directory path")}, "pattern")},
 	{Name: "write_file", Description: "Create or overwrite a file", Dangerous: true, Schema: objectSchema(map[string]any{"path": stringProperty("Path to the file"), "content": stringProperty("Complete file content")}, "path", "content")},
 	{Name: "edit_file", Description: "Replace one exact block in a file", Dangerous: true, Schema: objectSchema(map[string]any{"path": stringProperty("Path to the file"), "old_str": stringProperty("Unique text to replace"), "new_str": stringProperty("Replacement text")}, "path", "old_str", "new_str")},
-	{Name: "delete_file", Description: "Delete a file", Dangerous: true, Schema: objectSchema(map[string]any{"path": stringProperty("Path to the file")}, "path")},
+	{Name: "delete_file", Description: "Delete a file, or an entire directory including everything inside it (recursive). Always prefer this over bash rm/del/rmdir for deletions. Requires user approval.", Dangerous: true, Schema: objectSchema(map[string]any{"path": stringProperty("Path of the file or directory to delete")}, "path")},
+	{Name: "ask_user", Description: "Ask the user a question mid-task and wait for their answer. The question is shown in the terminal as a menu: pick one of your options or type a custom answer. Use it whenever you genuinely need a user decision — ambiguous requirements, preferences, or a choice between approaches. You may ask several questions in a row; each answer is returned to you.", Schema: objectSchema(map[string]any{
+		"question": stringProperty("The question to ask the user"),
+		"options":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Short answer choices to show as menu items (0-6). Omit for a free-text question."},
+	}, "question")},
 	{Name: "bash", Description: "Run a shell command in the workspace", Dangerous: true, Schema: objectSchema(map[string]any{"command": stringProperty("Command to execute")}, "command")},
 }
 
@@ -212,8 +216,21 @@ func (r Runner) Run(ctx context.Context, name string, in map[string]any) string 
 		if e != nil {
 			return "ERROR: " + e.Error()
 		}
+		if p == r.Root {
+			return "ERROR: refusing to delete the workspace root"
+		}
 		if e = snapshot(r.Root, p); e != nil {
 			return "ERROR: snapshot failed: " + e.Error()
+		}
+		info, e := os.Stat(p)
+		if e != nil {
+			return "ERROR: " + e.Error()
+		}
+		if info.IsDir() {
+			if e = os.RemoveAll(p); e != nil {
+				return "ERROR: " + e.Error()
+			}
+			return "OK: deleted directory " + p
 		}
 		if e = os.Remove(p); e != nil {
 			return "ERROR: " + e.Error()
@@ -425,6 +442,25 @@ func appendDiffLines(b *strings.Builder, sign string, lines []string) {
 	}
 }
 func snapshot(root, path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.IsDir() {
+		return filepath.Walk(path, func(p string, i os.FileInfo, e error) error {
+			if e != nil || i.IsDir() {
+				return e
+			}
+			return snapshotFile(root, p)
+		})
+	}
+	return snapshotFile(root, path)
+}
+
+func snapshotFile(root, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

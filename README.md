@@ -6,7 +6,8 @@ Mihani Code is a native Go terminal AI coding agent. It provides a focused works
 
 - Bubble Tea terminal UI with a block-based transcript, markdown rendering (glamour), and syntax-tinted diff previews
 - Streaming OpenAI-compatible responses with parallel tool-call reassembly
-- Multi-turn tool execution loops: read, write, edit, delete, search files plus shell commands
+- Multi-turn tool execution loops: read, write, edit, delete (files or whole directories), search files plus shell commands
+- **Interactive questions**: the model can pause mid-task and ask you a question — options appear as a menu you pick from, or you type a custom answer; it may ask several in a row
 - Two built-in endpoints (`hcnsec`, `seekai`) with curated default models; `/connect` discovers models from any OpenAI-compatible endpoint
 - **Live cost meter**: real input/output token accounting, per-model $ pricing, rolling 24h spend per provider
 - **Daily budget enforcement**: turns are refused once a provider reaches its 24h cap (default $10)
@@ -96,13 +97,13 @@ mihani --version
 | `/` … | type to filter the command palette |
 | `tab` / `shift+tab` | cycle modes (navigate the palette when it is open) |
 | `↑` / `↓` / `mouse wheel` / `pgup` / `pgdn` | scroll the transcript (arrows stay in the composer while it is multiline) |
-| **click a message** | *(only with `use_mouse: true` in config)* open Revert / Fork / Copy actions |
-| *select with mouse* | plain drag selects everywhere; copy via right-click / `ctrl+shift+c` |
+| **click a message** | open Revert / Fork / Copy actions for it |
+| *select with mouse* | drag anywhere in the transcript to select — selection survives scrolling; release auto-copies to the clipboard |
 | `ctrl+y` or `/copy` | copy Mihani's last reply to the clipboard — toast confirmation |
 | `esc` | interrupt request (press **twice** to terminate); otherwise clear input / close overlays |
 | `ctrl+c` | cancel request → deny pending approval → quit |
 
-Launching opens a fresh **home page / new season**; switch to past conversations with `/seasons` (aliases `/resume`, `/sessions`). To get mouse-click action menus instead of drag-select, set `"use_mouse": true` in `config.json` (selection then needs Shift+drag).
+Launching opens a fresh **home page / new season**; switch to past conversations with `/seasons` (aliases `/resume`, `/sessions`). Mouse capture is **on by default** (click menus + app-level drag selection above); set `"use_mouse": false` in `config.json` to fall back to your terminal's native drag-select (click menus off).
 
 While a turn is running you can keep typing: additional prompts are queued and sent automatically when the turn completes.
 

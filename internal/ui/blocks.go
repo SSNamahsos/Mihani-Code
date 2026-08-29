@@ -317,6 +317,8 @@ func summarizeInput(name string, input map[string]any) string {
 	switch name {
 	case "bash":
 		return get("command")
+	case "ask_user":
+		return get("question")
 	case "read_file", "write_file", "edit_file", "delete_file":
 		return get("path")
 	case "search_files":

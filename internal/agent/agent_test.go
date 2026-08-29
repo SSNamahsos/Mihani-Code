@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SSNamahsos/Mihani-Code/internal/config"
 	"github.com/SSNamahsos/Mihani-Code/internal/secrets"
@@ -226,5 +227,64 @@ func TestToolResultsAreRedactedEndToEnd(t *testing.T) {
 		if strings.Contains(string(b), secret) {
 			t.Fatal("secret leaked into stored history")
 		}
+	}
+}
+
+// ask_user pauses the tool loop and returns the UI's answer as the result.
+func TestAskUserReturnsUIAnswer(t *testing.T) {
+	a := &Agent{}
+	out := make(chan string, 1)
+	var askEv *Event
+	go func() {
+		result, err := a.runTool(context.Background(), "ask_user",
+			map[string]any{"question": "pick one"}, "id1",
+			func(string, map[string]any) bool { return false },
+			func(e Event) {
+				if e.Kind == "ask" {
+					got := e
+					askEv = &got
+					go func() {
+						time.Sleep(20 * time.Millisecond)
+						got.Answer <- "yes"
+					}()
+				}
+			})
+		if err != nil {
+			t.Error(err)
+		}
+		out <- result
+	}()
+	select {
+	case r := <-out:
+		if r != "User answered: yes" {
+			t.Fatalf("ask_user result = %q, want %q", r, "User answered: yes")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ask_user never returned")
+	}
+	if askEv == nil {
+		t.Fatal("ask event was not emitted")
+	}
+}
+
+// A cancelled context unblocks ask_user with an error result.
+func TestAskUserCancelledContext(t *testing.T) {
+	a := &Agent{}
+	ctx, cancel := context.WithCancel(context.Background())
+	out := make(chan string, 1)
+	go func() {
+		result, _ := a.runTool(ctx, "ask_user", map[string]any{"question": "q"}, "id2",
+			func(string, map[string]any) bool { return true }, func(Event) {})
+		out <- result
+	}()
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	select {
+	case r := <-out:
+		if !strings.Contains(r, "cancelled") {
+			t.Fatalf("cancelled ask result = %q", r)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ask_user did not unblock on cancellation")
 	}
 }

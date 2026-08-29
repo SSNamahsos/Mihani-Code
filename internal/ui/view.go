@@ -93,6 +93,8 @@ func (m *Model) View() string {
 		return m.overlayView()
 	case m.pendingApproval != nil:
 		return m.approvalOverlay()
+	case m.pendingAsk != nil:
+		return m.askView()
 	}
 	var b strings.Builder
 	b.WriteString(m.headerRow())
@@ -305,7 +307,8 @@ func (m *Model) welcome() string {
 		lipgloss.NewStyle().Foreground(colText).Render("/ seasons") + lipgloss.NewStyle().Foreground(colFaint).Render("   open a past conversation from this folder"),
 		lipgloss.NewStyle().Foreground(colText).Render("/ commands") + lipgloss.NewStyle().Foreground(colFaint).Render("   browse everything mihani can do"),
 		lipgloss.NewStyle().Foreground(colText).Render("tab modes") + lipgloss.NewStyle().Foreground(colFaint).Render("     build, plan, research, or ask"),
-		lipgloss.NewStyle().Foreground(colText).Render("select text") + lipgloss.NewStyle().Foreground(colFaint).Render("    drag to select · press [ ] then y/c/r on a message"),
+		lipgloss.NewStyle().Foreground(colText).Render("click a message") + lipgloss.NewStyle().Foreground(colFaint).Render("  open revert / fork / copy actions"),
+		lipgloss.NewStyle().Foreground(colText).Render("select text") + lipgloss.NewStyle().Foreground(colFaint).Render("    drag to select · release copies it"),
 	}
 
 	examples := []string{

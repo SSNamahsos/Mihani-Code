@@ -146,6 +146,12 @@ type Model struct {
 	approvalPreview string
 	approveAll      bool
 
+	pendingAsk  chan string
+	askQuestion string
+	askOptions  []string
+	askIndex    int
+	askCustom   bool
+
 	overlay       string
 	overlayItems  []overlayItem
 	overlayIndex  int
@@ -179,7 +185,15 @@ type Model struct {
 	escArmed   bool // double-press confirmation for interrupting a request
 	escArmedAt time.Time
 
+	selOn      bool  // mouse-drag selection in progress
+	selDrag    bool  // drag actually moved (else it's a click)
+	selA       selPos
+	selH       selPos
+
 	blockLines []int // rendered row count per transcript block (for hit-testing)
+	// renderedLines is the latest styled transcript (full content, pre-scroll)
+	// kept so selection highlight and copy work in content coordinates.
+	renderedLines []string
 }
 
 const defaultToastTTL = 2500 * time.Millisecond
@@ -205,7 +219,7 @@ func New(cfg config.Config, version, resumeID, initialPrompt string) (Model, err
 		return Model{}, err
 	}
 	ta := textarea.New()
-	ta.Placeholder = "Ask Mihani to inspect, build, fix, or explain…"
+	ta.Placeholder = "Ask Mihani to inspect, build, fix, or explain..."
 	ta.Focus()
 	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
@@ -235,7 +249,7 @@ func New(cfg config.Config, version, resumeID, initialPrompt string) (Model, err
 	m.refreshSpend()
 
 	// Every launch is a brand-new season (home page). Past conversations in
-	// this folder are reachable via /seasons — never auto-restored.
+	// this folder are reachable via /seasons - never auto-restored.
 	resumed := false
 	if resumeID != "" {
 		if record, e := session.Load(resumeID); e == nil && record.Workspace == root {
@@ -288,7 +302,7 @@ func (m *Model) replayUser(msg map[string]any) {
 	switch c := content.(type) {
 	case string:
 		// Prompt-based tool results are fed back as a user message containing
-		// <tool_result> blocks to a chat-only endpoint — render those as tool
+		// <tool_result> blocks to a chat-only endpoint - render those as tool
 		// cards, never as user prose.
 		if strings.Contains(c, "<tool_result") {
 			m.replayPromptToolResults(c)
@@ -465,20 +479,17 @@ func shortID(id string) string {
 	return id
 }
 
-// Run starts the interactive TUI. Mouse capture is deliberately OFF so native
-// text selection works everywhere; terminal emulators translate the physical
-// wheel into up/down keypresses in alternate-screen mode, which scroll here.
+// Run starts the interactive TUI. Mouse capture is ON by default so message
+// action menus (click) and app-level drag selection work everywhere; the
+// terminal's native selection is disabled while mouse capture is active.
+// Set config use_mouse=false to restore native drag-select (click menus off).
 func Run(cfg config.Config, version, resumeID, initialPrompt string) error {
 	m, err := New(cfg, version, resumeID, initialPrompt)
 	if err != nil {
 		return err
 	}
-	// Default: mouse OFF → native drag-select everywhere; the wheel still
-	// scrolls because terminals translate it to arrow keys in alt-screen.
-	// Set config use_mouse=true for click-to-open message action menus
-	// (drag-select then needs Shift+drag in most terminals).
 	opts := []tea.ProgramOption{tea.WithAltScreen()}
-	if cfg.UseMouse {
+	if cfg.MouseEnabled() {
 		opts = append(opts, tea.WithMouseCellMotion())
 	}
 	p := tea.NewProgram(&m, opts...)
@@ -508,23 +519,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
-		if m.overlay != "" || m.connectOpen || m.keyEditOpen || m.pendingApproval != nil {
+		if m.overlay != "" || m.connectOpen || m.keyEditOpen || m.pendingApproval != nil || m.pendingAsk != nil {
 			break
 		}
-		if x.Action == tea.MouseActionPress && x.Button == tea.MouseButtonWheelUp {
+		switch {
+		case x.Action == tea.MouseActionPress && x.Button == tea.MouseButtonWheelUp:
 			m.scrollUp(3)
-			return m, nil
-		}
-		if x.Action == tea.MouseActionPress && x.Button == tea.MouseButtonWheelDown {
+		case x.Action == tea.MouseActionPress && x.Button == tea.MouseButtonWheelDown:
 			m.scrollDown(3)
-			return m, nil
+		case x.Button == tea.MouseButtonLeft && x.Action == tea.MouseActionPress:
+			m.mousePress(x)
+		case x.Button == tea.MouseButtonLeft && x.Action == tea.MouseActionRelease:
+			m.mouseRelease(x)
+		case x.Button == tea.MouseButtonLeft && x.Action == tea.MouseActionMotion:
+			m.mouseMove(x)
 		}
-		if x.Action == tea.MouseActionPress && x.Button == tea.MouseButtonLeft {
-			if b := m.nearUserMessage(x.Y); b >= 0 {
-				m.openMessageMenu(b)
-				return m, nil
-			}
-		}
+		return m, nil
 
 	case eventMsg:
 		m.handle(agent.Event(x))
@@ -607,6 +617,12 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 		return m, nil, true
 
+	case m.pendingAsk != nil:
+		if cmd, _ := m.updateAskKey(x); cmd != nil {
+			return m, cmd, true
+		}
+		return m, nil, true
+
 	case m.focusActive:
 		switch key {
 		case "esc", "enter", "q":
@@ -631,6 +647,10 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, tick(), true
 
 	case key == "esc":
+		if m.selOn {
+			m.clearSelection()
+			return m, nil, true
+		}
 		if m.busy {
 			// Double-press to confirm: first Esc arms, second Esc terminates.
 			if m.escArmed && time.Since(m.escArmedAt) < 1500*time.Millisecond {
@@ -748,7 +768,10 @@ func (m *Model) interrupt() {
 	if m.pendingApproval != nil {
 		m.answerApproval(false)
 	}
-	m.status = "cancelling…"
+	if m.pendingAsk != nil {
+		m.clearAsk()
+	}
+	m.status = "cancelling..."
 }
 
 // answerApproval replies to a pending permission request exactly once.
@@ -811,11 +834,11 @@ func (m *Model) budgetBlock() string {
 	}
 	return fmt.Sprintf(
 		"Mihani daily limit reached: $%.2f of $%.2f used in the last 24h. "+
-			"Budget resets in %s — add your own key via /settings → Personal API key, switch provider with /providers, use a free model, or raise budget_usd in settings.",
+			"Budget resets in %s - add your own key via /settings → Personal API key, switch provider with /providers, use a free model, or raise budget_usd in settings.",
 		m.spend, budget, when)
 }
 
-// embeddedSpend is shared-key spend only — personal keys have their own quota.
+// embeddedSpend is shared-key spend only - personal keys have their own quota.
 func (m *Model) embeddedSpend() float64 {
 	return usage.WindowSumFor(m.cfg.CurrentProvider, usage.Embedded)
 }
@@ -975,7 +998,7 @@ func (m *Model) applyMessageAction(blockIdx, action int) {
 		m.input.Reset()
 		m.input.SetValue(text)
 		m.resizeComposer()
-		m.notify("Loaded into composer — edit and press enter to resend")
+		m.notify("Loaded into composer - edit and press enter to resend")
 	case 1: // fork: rewind transcript + history, prefill composer
 		m.doFork(blockIdx)
 	case 2: // copy
@@ -1049,7 +1072,7 @@ func (m *Model) doFork(idx int) {
 	m.resizeComposer()
 	m.saveSession()
 	m.relayout()
-	m.notify("Forked — earlier context kept, edit and resend")
+	m.notify("Forked - earlier context kept, edit and resend")
 }
 
 func (m *Model) submit(s string) tea.Cmd {
@@ -1067,7 +1090,7 @@ func (m *Model) startTurn(prompt string) tea.Cmd {
 		return nil
 	}
 	if kind == usage.Personal {
-		m.notify("Shared limit reached — using your personal API key")
+		m.notify("Shared limit reached - using your personal API key")
 	}
 	m.closeActiveAssistant()
 	m.blocks = append(m.blocks, &block{kind: blockUser, content: prompt})
@@ -1232,6 +1255,12 @@ func (m *Model) handle(e agent.Event) {
 		}
 		m.status = "approval needed"
 
+	case "ask":
+		if e.Answer != nil {
+			m.handleAsk(e.Text, e.Input, e.Answer)
+			m.refreshView()
+		}
+
 	case "usage":
 		if e.Tokens > 0 {
 			m.tokens = e.Tokens
@@ -1312,7 +1341,7 @@ func truncatePreview(preview string) string {
 	lines := strings.Split(preview, "\n")
 	const maxLines = 40
 	if len(lines) > maxLines {
-		return strings.Join(lines[:maxLines], "\n") + fmt.Sprintf("\n… %d more line(s)", len(lines)-maxLines)
+		return strings.Join(lines[:maxLines], "\n") + fmt.Sprintf("\n... %d more line(s)", len(lines)-maxLines)
 	}
 	return preview
 }
@@ -1333,6 +1362,10 @@ func (m *Model) refreshView() {
 		rendered = append(rendered, text)
 		prevKind = b.kind
 	}
+	if m.selOn && m.selDrag {
+		rendered = highlightSelection(rendered, m.selA, m.selH)
+	}
+	m.renderedLines = rendered
 	m.view.SetContent(strings.Join(rendered, "\n"))
 	if m.stickBottom {
 		m.view.GotoBottom()
@@ -1358,7 +1391,7 @@ func (m *Model) blockAtScreenY(y int) int {
 }
 
 // nearUserMessage returns the transcript index of the user message nearest the
-// clicked row — exact hit first, then a small block tolerance so a click just
+// clicked row - exact hit first, then a small block tolerance so a click just
 // above or below a message box still opens its action menu.
 func (m *Model) nearUserMessage(y int) int {
 	idx := m.blockAtScreenY(y)
@@ -1396,7 +1429,7 @@ func (m *Model) saveSession() {
 		}
 	}
 	if len(title) > 80 {
-		title = title[:77] + "…"
+		title = title[:77] + "..."
 	}
 	_ = session.Save(session.Record{
 		ID:        m.sessionID,

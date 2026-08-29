@@ -770,8 +770,10 @@ func TestClickOpensMessageMenu(t *testing.T) {
 	m.relayout()
 	m.refreshView()
 
-	// Clicking the first user row (top of transcript) opens the menu.
+	// Clicking the first user row (top of transcript) opens the menu on release.
 	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft, X: 5, Y: 2})
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease,
 		Button: tea.MouseButtonLeft, X: 5, Y: 2})
 	if m.overlay != "Message" {
 		t.Fatalf("clicking a user message should open the menu, overlay=%q", m.overlay)
@@ -999,5 +1001,162 @@ func TestUsageEventRecordsSpend(t *testing.T) {
 	label := m.spendLabel()
 	if !strings.Contains(label, "$1.00/$10.00") {
 		t.Fatalf("spend label missing totals: %q", label)
+	}
+}
+
+// Drag selection: press + motion arms the selection, release copies plain text.
+func TestDragSelectionCopiesText(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.appendBlock(&block{kind: blockAssistant, content: "the answer text", finalized: true})
+	m.refreshView()
+
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 0, Y: 1})
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 17, Y: 1})
+	if !m.selOn || !m.selDrag {
+		t.Fatalf("selection should be armed while dragging: on=%v drag=%v", m.selOn, m.selDrag)
+	}
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 17, Y: 1})
+	if m.selOn {
+		t.Fatal("selection should clear after release")
+	}
+	if !strings.Contains(m.toast, "Copied") {
+		t.Fatalf("expected a copy toast, got %q", m.toast)
+	}
+}
+
+// Selection lives in content coordinates, so wheel scrolling keeps it armed.
+func TestSelectionSurvivesScroll(t *testing.T) {
+	m := newTestModel(100, 30)
+	for i := 0; i < 12; i++ {
+		m.appendBlock(&block{kind: blockAssistant, content: fmt.Sprintf("line batch %02d with some words", i), finalized: true})
+	}
+	m.refreshView()
+
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 0, Y: 1})
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 10, Y: 2})
+	if !m.selOn || !m.selDrag {
+		t.Fatal("selection not armed after drag start")
+	}
+	a, h := m.selA, m.selH
+	m.scrollDown(5) // the viewport moves; the selection must not
+	if !m.selOn || !m.selDrag {
+		t.Fatal("scrolling should not drop an armed selection")
+	}
+	if m.selA != a || m.selH != h {
+		t.Fatalf("scrolling moved the selection: before=%+v after=%+v", a, m.selH)
+	}
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 10, Y: 2})
+	if !strings.Contains(m.toast, "Copied") {
+		t.Fatalf("expected a copy toast after release, got %q", m.toast)
+	}
+}
+
+// A single click (no motion) must not copy; it is handled as a menu click.
+func TestClickWithoutMotionDoesNotCopy(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.appendBlock(&block{kind: blockAssistant, content: "clickable area", finalized: true})
+	m.refreshView()
+
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 3, Y: 1})
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 3, Y: 1})
+	if m.toast != "" && strings.Contains(m.toast, "Copied") {
+		t.Fatalf("plain click should not copy, toast=%q", m.toast)
+	}
+	if m.selOn {
+		t.Fatal("selection state should be cleared after a click")
+	}
+}
+
+// Esc cancels an armed selection without copying.
+func TestEscCancelsSelection(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.appendBlock(&block{kind: blockAssistant, content: "selectable words", finalized: true})
+	m.refreshView()
+
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 0, Y: 1})
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 12, Y: 1})
+	if !m.selOn {
+		t.Fatal("selection should be armed")
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.selOn {
+		t.Fatal("esc should cancel the selection")
+	}
+	if strings.Contains(m.toast, "Copied") {
+		t.Fatal("cancelled selection must not copy")
+	}
+}
+
+// ask_user: options menu flow delivers the picked option to the agent.
+func TestAskUserMenuDeliversChosenOption(t *testing.T) {
+	m := newTestModel(100, 40)
+	ans := make(chan string, 1)
+	m.handle(agent.Event{Kind: "ask", Text: "Which DB?", Input: map[string]any{
+		"question": "Which DB?",
+		"options":  []any{"postgres", "sqlite"},
+	}, Answer: ans})
+	if m.pendingAsk == nil || m.askQuestion != "Which DB?" || len(m.askOptions) != 2 {
+		t.Fatalf("ask event not installed: pending=%v q=%q opts=%v", m.pendingAsk != nil, m.askQuestion, m.askOptions)
+	}
+	if v := stripANSI(m.View()); !strings.Contains(v, "Which DB?") || !strings.Contains(v, "postgres") {
+		t.Fatalf("ask view should show question and options, got:\n%s", v)
+	}
+
+	_, _, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyDown}) // move to option 2
+	_, _, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	select {
+	case a := <-ans:
+		if a != "sqlite" {
+			t.Fatalf("wrong answer delivered: %q", a)
+		}
+	default:
+		t.Fatal("answer was not delivered to the agent channel")
+	}
+	if m.pendingAsk != nil {
+		t.Fatal("ask state should clear after answering")
+	}
+}
+
+// ask_user: the custom-answer row and free text path.
+func TestAskUserCustomAnswerPath(t *testing.T) {
+	m := newTestModel(100, 40)
+	ans := make(chan string, 1)
+	m.handle(agent.Event{Kind: "ask", Text: "Name the file?", Input: map[string]any{
+		"question": "Name the file?",
+		"options":  []any{"a.txt", "b.txt"},
+	}, Answer: ans})
+
+	// To the last row (custom answer) and select it.
+	_, _, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	_, _, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	_, _, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.askCustom {
+		t.Fatal("last row should switch to the custom answer field")
+	}
+	m.connectInput.SetValue("notes.md")
+	_, _, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	select {
+	case a := <-ans:
+		if a != "notes.md" {
+			t.Fatalf("custom answer mismatch: %q", a)
+		}
+	default:
+		t.Fatal("custom answer not delivered")
+	}
+}
+
+// ask_user: esc skips the question with a proceed-anyway answer.
+func TestAskUserEscDismisses(t *testing.T) {
+	m := newTestModel(100, 40)
+	ans := make(chan string, 1)
+	m.handle(agent.Event{Kind: "ask", Text: "Continue?", Input: map[string]any{"question": "Continue?"}, Answer: ans})
+	_, _, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	select {
+	case a := <-ans:
+		if !strings.Contains(a, "dismissed") {
+			t.Fatalf("esc should deliver a dismissal answer, got %q", a)
+		}
+	default:
+		t.Fatal("dismissal answer not delivered")
 	}
 }

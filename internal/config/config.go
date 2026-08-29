@@ -58,7 +58,7 @@ type Config struct {
 	BudgetUSD       float64                  `json:"budget_usd,omitempty"`
 	Pricing         map[string]pricing.Entry `json:"pricing,omitempty"`
 	AutoConfirm     bool                     `json:"auto_confirm"`
-	UseMouse        bool                     `json:"use_mouse,omitempty"` // enables click action menus; disables native drag-select (use shift+drag)
+	UseMouse        *bool                    `json:"use_mouse,omitempty"` // nil = mouse on (click menus + drag select); false = native terminal selection only
 	MaxIterations   int                      `json:"max_iterations,omitempty"`
 	Workspace       string                   `json:"workspace,omitempty"`
 	Providers       map[string]Provider      `json:"providers"`
@@ -252,6 +252,13 @@ func (c Config) Budget() float64 {
 // providers run on their own credentials and are never capped here.
 func (c Config) IsBuiltinProvider(name string) bool {
 	return name == BuiltinPrimary || name == BuiltinSecondary
+}
+
+// MouseEnabled reports whether the TUI captures the mouse (click action
+// menus + app-level drag selection). Mouse capture is ON unless the user
+// explicitly sets use_mouse=false in config.
+func (c Config) MouseEnabled() bool {
+	return c.UseMouse == nil || *c.UseMouse
 }
 
 // BudgetEnforced returns the daily cap for the active provider, or 0 when no

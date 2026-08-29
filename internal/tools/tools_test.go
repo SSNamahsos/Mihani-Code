@@ -150,3 +150,36 @@ func tailOf(s string, n int) string {
 	}
 	return s[len(s)-n:]
 }
+
+func TestRunnerDeletesFilesAndDirectories(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "junk.txt")
+	if err := os.WriteFile(file, []byte("bye"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := (Runner{Root: root}).Run(context.Background(), "delete_file", map[string]any{"path": "junk.txt"}); !strings.HasPrefix(got, "OK:") {
+		t.Fatalf("file delete failed: %q", got)
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatal("file was not deleted")
+	}
+
+	dir := filepath.Join(root, "folder")
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "deep.txt"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := (Runner{Root: root}).Run(context.Background(), "delete_file", map[string]any{"path": "folder"}); !strings.Contains(got, "deleted directory") {
+		t.Fatalf("directory delete failed: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sub", "deep.txt")); !os.IsNotExist(err) {
+		t.Fatal("directory tree was not deleted recursively")
+	}
+
+	// Deleting the workspace root itself must be refused.
+	if got := (Runner{Root: root}).Run(context.Background(), "delete_file", map[string]any{"path": "."}); !strings.Contains(got, "refusing") {
+		t.Fatalf("root delete should be refused, got %q", got)
+	}
+}
