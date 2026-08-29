@@ -104,7 +104,7 @@ mihani --version
 | `esc` | interrupt request (press **twice** to terminate); otherwise clear input / close overlays |
 | `ctrl+c` | cancel request → deny pending approval → quit |
 
-Launching opens a fresh **home page / new season**; switch to past conversations with `/seasons` (aliases `/resume`, `/sessions`). Mouse capture is **on by default** (click menus + app-level drag selection above); set `"use_mouse": false` in `config.json` to fall back to your terminal's native drag-select (click menus off).
+Launching opens a fresh **home page / new season**; switch to past conversations with `/seasons` (aliases `/resume`, `/sessions`). Mouse capture is **on by default** (click menus + app-level drag selection above) on modern terminals; on the legacy Windows console (conhost) it defaults **off** because its mouse input is unreliable — there use drag-select plus `[` / `]` on a message for the action menu. Check or override at runtime: `/mouse` shows the state, and `"use_mouse": true/false` in `config.json` forces it.
 
 While a turn is running you can keep typing: additional prompts are queued and sent automatically when the turn completes.
 

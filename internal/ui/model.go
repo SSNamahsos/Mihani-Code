@@ -102,6 +102,7 @@ var commands = []commandItem{
 	{name: "/session", description: "Show the current session ID"},
 	{name: "/mcp", description: "Show configured MCP servers"},
 	{name: "/undo", description: "Restore the latest Mihani file snapshot"},
+	{name: "/mouse", description: "Show mouse capture state (click menus / drag select)"},
 	{name: "/settings", description: "Open Mihani settings"},
 	{name: "/quit", description: "Exit Mihani Code"},
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/SSNamahsos/Mihani-Code/internal/pricing"
@@ -255,10 +256,35 @@ func (c Config) IsBuiltinProvider(name string) bool {
 }
 
 // MouseEnabled reports whether the TUI captures the mouse (click action
-// menus + app-level drag selection). Mouse capture is ON unless the user
-// explicitly sets use_mouse=false in config.
+// menus + app-level drag selection). Explicit use_mouse in config always
+// wins; otherwise the default is ON, except on the legacy Windows console
+// (conhost) whose mouse input is unreliable — there native selection and
+// the [ ] keyboard message menu are kept instead.
 func (c Config) MouseEnabled() bool {
-	return c.UseMouse == nil || *c.UseMouse
+	if c.UseMouse != nil {
+		return *c.UseMouse
+	}
+	return !legacyWindowsConsole()
+}
+
+// legacyWindowsConsole reports the classic conhost (no Windows Terminal, no
+// ConEmu/Cmder, no VSCode/Alacritty/kitty/ghostty integration).
+func legacyWindowsConsole() bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	if os.Getenv("WT_SESSION") != "" || // Windows Terminal
+		os.Getenv("TERM_PROGRAM") != "" || // VSCode, iTerm, ghostty, wezterm...
+		os.Getenv("CONEMUCMD") != "" || // ConEmu / cmder
+		os.Getenv("ConEmuANSI") != "" ||
+		os.Getenv("ALACRITTY_LOG") != "" ||
+		os.Getenv("KITTY_WINDOW_ID") != "" {
+		return false
+	}
+	if strings.Contains(strings.ToLower(os.Getenv("TERM")), "xterm") {
+		return false
+	}
+	return true
 }
 
 // BudgetEnforced returns the daily cap for the active provider, or 0 when no

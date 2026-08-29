@@ -167,7 +167,7 @@ func TestCommandPaletteFiltersByPrefix(t *testing.T) {
 	for _, item := range items {
 		names = append(names, item.name)
 	}
-	if len(items) != 2 || !contains(names, "/mode") || !contains(names, "/models") {
+	if len(items) != 3 || !contains(names, "/mode") || !contains(names, "/models") || !contains(names, "/mouse") {
 		t.Fatalf("unexpected filtered commands: %v", names)
 	}
 }

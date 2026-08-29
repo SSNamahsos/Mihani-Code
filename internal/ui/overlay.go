@@ -382,6 +382,15 @@ func (m *Model) command(s string) tea.Cmd {
 		}
 		m.appendBlock(&block{kind: blockInfo, content: result})
 
+	case "/mouse":
+		state := "off — native terminal selection, no click menus"
+		if m.cfg.MouseEnabled() {
+			state = "on — click a message for actions, drag to select (release copies)"
+		}
+		m.appendBlock(&block{kind: blockInfo,
+			content: "mouse capture: " + state + "\n" +
+				"To change: set \"use_mouse\": true (or false) in ~/.mihani/config.json, then restart mihani."})
+
 	case "/copy":
 		if cmd := m.copyLastReply(); cmd != nil {
 			return cmd
