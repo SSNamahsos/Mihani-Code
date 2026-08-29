@@ -2,7 +2,10 @@ package ui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,6 +18,21 @@ import (
 // message action menu instead.
 
 type selPos struct{ row, col int }
+
+// mouseDebugLog appends raw mouse traffic to %TEMP%\mihani-mouse.log while
+// MIHANI_DEBUG is set — isolates terminal input issues in the field.
+func mouseDebugLog(x tea.MouseMsg, m *Model) {
+	if os.Getenv("MIHANI_DEBUG") == "" {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(os.TempDir(), "mihani-mouse.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s button=%v action=%v x=%d y=%d yoffset=%d rows=%d selOn=%v overlay=%q busy=%v\n",
+		time.Now().Format("15:04:05.000"), x.Button, x.Action, x.X, x.Y, m.view.YOffset, len(m.renderedLines), m.selOn, m.overlay, m.busy)
+}
 
 var selHighlight = lipgloss.NewStyle().Background(lipgloss.Color("#414a70"))
 

@@ -544,6 +544,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
+		mouseDebugLog(x, m)
 		if m.overlay != "" || m.connectOpen || m.keyEditOpen || m.pendingApproval != nil || m.pendingAsk != nil {
 			break
 		}
@@ -1453,9 +1454,16 @@ func (m *Model) blockAtScreenY(y int) int {
 	return -1
 }
 
+// lineAtScreenY maps a terminal row to a transcript content row (header is
+// screen row 0). May be negative or past the end when outside the transcript.
+func (m *Model) lineAtScreenY(y int) int {
+	return m.view.YOffset + y - 1
+}
+
 // nearUserMessage returns the transcript index of the user message nearest the
-// clicked row - exact hit first, then a small block tolerance so a click just
-// above or below a message box still opens its action menu.
+// clicked row. Exact hits win; otherwise the closest user block within a few
+// lines is returned so a click just outside a message box still opens its
+// action menu.
 func (m *Model) nearUserMessage(y int) int {
 	idx := m.blockAtScreenY(y)
 	if idx < 0 || idx >= len(m.blocks) {
@@ -1464,15 +1472,31 @@ func (m *Model) nearUserMessage(y int) int {
 	if m.blocks[idx].kind == blockUser {
 		return idx
 	}
-	// The click landed on a tool card or reply: scan outward a couple of
-	// blocks for the closest user message.
-	for _, delta := range []int{-1, 1, -2, 2} {
-		i := idx + delta
-		if i >= 0 && i < len(m.blocks) && m.blocks[i].kind == blockUser {
-			return i
+	const maxGap = 6
+	clickLine := m.lineAtScreenY(y)
+	best, bestGap := -1, maxGap+1
+	cum := 0
+	for i, b := range m.blocks {
+		start := cum
+		cum += m.blockLines[i]
+		if b.kind != blockUser {
+			continue
+		}
+		end := cum - 1
+		var gap int
+		switch {
+		case clickLine < start:
+			gap = start - clickLine
+		case clickLine > end:
+			gap = clickLine - end
+		default:
+			gap = 0
+		}
+		if gap < bestGap {
+			best, bestGap = i, gap
 		}
 	}
-	return -1
+	return best
 }
 
 func (m *Model) spinnerGlyph() string {

@@ -1262,3 +1262,21 @@ func TestReplayRebuildsTodoCard(t *testing.T) {
 		t.Fatalf("expected rebuilt todo card with list, got %d todo cards in %d blocks", n, len(m.blocks))
 	}
 }
+
+// A click one line above a user card (on the separator row) still opens the
+// menu via the line-based tolerance.
+func TestClickNearUserMessageOpensMenu(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.appendBlock(&block{kind: blockAssistant, content: "above reply", finalized: true})
+	m.appendBlock(&block{kind: blockUser, content: "click near me"})
+	m.appendBlock(&block{kind: blockAssistant, content: "below reply", finalized: true})
+	m.refreshView()
+
+	// Block layout: assistant(1) + separator(1) + user card(4) + separator(1) + assistant(1).
+	// Content row 1 is the separator just above the user card.
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 4, Y: 2})
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 4, Y: 2})
+	if m.overlay != "Message" {
+		t.Fatalf("click near a user message should open the menu, overlay=%q", m.overlay)
+	}
+}
