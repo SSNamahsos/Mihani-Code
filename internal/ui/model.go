@@ -234,16 +234,16 @@ func New(cfg config.Config, version, resumeID, initialPrompt string) (Model, err
 	m.agent.MaxIterations = cfg.MaxIterations
 	m.refreshSpend()
 
+	// Every launch is a brand-new season (home page). Past conversations in
+	// this folder are reachable via /seasons — never auto-restored.
 	resumed := false
 	if resumeID != "" {
-		if record, e := session.Load(resumeID); e == nil {
+		if record, e := session.Load(resumeID); e == nil && record.Workspace == root {
 			resumed = m.restore(record)
 		}
-	} else if record, e := session.LatestForWorkspace(root); e == nil && len(record.History) > 0 {
-		resumed = m.restore(record)
 	}
 	if resumed {
-		m.appendBlock(&block{kind: blockInfo, content: "resumed previous session " + shortID(m.sessionID)})
+		m.appendBlock(&block{kind: blockInfo, content: "resumed previous season " + shortID(m.sessionID)})
 	}
 	// Personal keys are user secrets: scrub them from every tool result too.
 	for _, id := range []string{config.BuiltinPrimary, config.BuiltinSecondary} {
@@ -473,10 +473,15 @@ func Run(cfg config.Config, version, resumeID, initialPrompt string) error {
 	if err != nil {
 		return err
 	}
-	// Mouse reporting lets you click a user message for its action menu
-	// (revert/fork/copy). Text selection still works with Shift+drag (or
-	// Ctrl+Shift+drag) in Windows Terminal, VS Code, iTerm2, kitty, etc.
-	p := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// Default: mouse OFF → native drag-select everywhere; the wheel still
+	// scrolls because terminals translate it to arrow keys in alt-screen.
+	// Set config use_mouse=true for click-to-open message action menus
+	// (drag-select then needs Shift+drag in most terminals).
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	if cfg.UseMouse {
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+	p := tea.NewProgram(&m, opts...)
 	m.program = p
 	_, runErr := p.Run()
 	m.agent.Close()

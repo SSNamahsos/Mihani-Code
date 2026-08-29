@@ -96,11 +96,13 @@ mihani --version
 | `/` … | type to filter the command palette |
 | `tab` / `shift+tab` | cycle modes (navigate the palette when it is open) |
 | `↑` / `↓` / `mouse wheel` / `pgup` / `pgdn` | scroll the transcript (arrows stay in the composer while it is multiline) |
-| **click a message** | open Revert / Fork / Copy actions for that message |
-| *select with mouse* | plain drag selects; copy via right-click / `ctrl+shift+c` |
+| **click a message** | *(only with `use_mouse: true` in config)* open Revert / Fork / Copy actions |
+| *select with mouse* | plain drag selects everywhere; copy via right-click / `ctrl+shift+c` |
 | `ctrl+y` or `/copy` | copy Mihani's last reply to the clipboard — toast confirmation |
 | `esc` | interrupt request (press **twice** to terminate); otherwise clear input / close overlays |
 | `ctrl+c` | cancel request → deny pending approval → quit |
+
+Launching opens a fresh **home page / new season**; switch to past conversations with `/seasons` (aliases `/resume`, `/sessions`). To get mouse-click action menus instead of drag-select, set `"use_mouse": true` in `config.json` (selection then needs Shift+drag).
 
 While a turn is running you can keep typing: additional prompts are queued and sent automatically when the turn completes.
 

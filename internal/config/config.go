@@ -58,6 +58,7 @@ type Config struct {
 	BudgetUSD       float64                  `json:"budget_usd,omitempty"`
 	Pricing         map[string]pricing.Entry `json:"pricing,omitempty"`
 	AutoConfirm     bool                     `json:"auto_confirm"`
+	UseMouse        bool                     `json:"use_mouse,omitempty"` // enables click action menus; disables native drag-select (use shift+drag)
 	MaxIterations   int                      `json:"max_iterations,omitempty"`
 	Workspace       string                   `json:"workspace,omitempty"`
 	Providers       map[string]Provider      `json:"providers"`

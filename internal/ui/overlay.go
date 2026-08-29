@@ -211,10 +211,10 @@ func (m *Model) command(s string) tea.Cmd {
 		for _, item := range commands {
 			rows = append(rows, fmt.Sprintf("%-11s %s", item.name, item.description))
 		}
-		keys := "enter send · ctrl+j newline · tab/shift+tab cycle modes · esc interrupt or clear\n" +
-			"↑↓/pgup/pgdn scroll transcript · ctrl+y or /copy copy last reply\n" +
-			"[ ] inspect your messages → y copy · f fork from here · r revert to composer\n" +
-			"drag-select any text to copy natively (ctrl+shift+c / right-click)\n" +
+		keys := "enter send · ctrl+j newline · tab/shift+tab cycle modes · esc (twice) stop request\n" +
+			"↑↓/pgup/pgdn scroll · drag to select text and copy natively\n" +
+			"[ ] pick a message → y copy · f fork · r revert to composer · /seasons to switch conversations\n" +
+			"ctrl+y or /copy copy last reply\n" +
 			"ctrl+c cancel request or quit"
 		m.appendBlock(&block{kind: blockInfo, content: "Commands\n" + strings.Join(rows, "\n") + "\n\nKeys\n" + keys})
 

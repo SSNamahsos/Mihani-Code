@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/SSNamahsos/Mihani-Code/internal/session"
 	"github.com/SSNamahsos/Mihani-Code/internal/usage"
 )
 
@@ -159,7 +160,7 @@ func (m *Model) statusRow() string {
 		left = lipgloss.NewStyle().Foreground(colCyan).Render("… message queued")
 	default:
 		left = lipgloss.NewStyle().Foreground(colFaint).
-			Render("/ commands · tab mode · ↑↓/pgup scroll · ctrl+y copy reply · ctrl+c quit")
+			Render("/ seasons · / commands · tab mode · ↑↓/pgup scroll · esc stop")
 	}
 	window := m.cfg.ContextWindow
 	if window <= 0 {
@@ -273,20 +274,38 @@ func (m *Model) welcome() string {
 	mode := currentMode(m.modeIndex)
 	logo := lipgloss.NewStyle().Bold(true).Foreground(colAccent).Render("◆ Mihani Code") +
 		lipgloss.NewStyle().Foreground(colFaint).Render("  "+m.version)
-	tagline := lipgloss.NewStyle().Foreground(colDim).
-		Render("Terminal workspace for building software with AI agents.")
 
+	// Home page: this launch is a brand-new conversation (season).
+	seasonHeader := lipgloss.NewStyle().Bold(true).Foreground(colBright).Render("NEW SEASON") +
+		lipgloss.NewStyle().Foreground(colFaint).Render("  ·  "+shortID(m.sessionID))
 	infoRows := []string{
+		seasonHeader,
 		lipgloss.NewStyle().Foreground(colFaint).Render("workspace ") + shortPath(m.root),
 		lipgloss.NewStyle().Foreground(colFaint).Render("provider  ") + m.cfg.ProviderLabel() + " · " + m.cfg.CurrentModel,
 		lipgloss.NewStyle().Foreground(mode.color).Render("mode      ") + mode.name + " — " + mode.description,
 	}
 
+	// Count past seasons in this folder so /seasons feels discoverable.
+	seasonHint := "no previous seasons here yet"
+	if records, err := session.List(); err == nil && len(records) > 0 {
+		n := 0
+		for _, r := range records {
+			if r.Workspace == m.root {
+				n++
+			}
+		}
+		if n > 0 {
+			seasonHint = fmt.Sprintf("%d previous season(s) in this folder — type /seasons to switch", n)
+		} else {
+			seasonHint = "you have seasons in other folders — type /seasons"
+		}
+	}
+
 	keys := []string{
+		lipgloss.NewStyle().Foreground(colText).Render("/ seasons") + lipgloss.NewStyle().Foreground(colFaint).Render("   open a past conversation from this folder"),
 		lipgloss.NewStyle().Foreground(colText).Render("/ commands") + lipgloss.NewStyle().Foreground(colFaint).Render("   browse everything mihani can do"),
 		lipgloss.NewStyle().Foreground(colText).Render("tab modes") + lipgloss.NewStyle().Foreground(colFaint).Render("     build, plan, research, or ask"),
-		lipgloss.NewStyle().Foreground(colText).Render("click a msg") + lipgloss.NewStyle().Foreground(colFaint).Render("   revert / fork / copy · or [ ] keys while composing"),
-		lipgloss.NewStyle().Foreground(colText).Render("↑↓ / pgup") + lipgloss.NewStyle().Foreground(colFaint).Render("    scroll history · shift+drag to select and copy"),
+		lipgloss.NewStyle().Foreground(colText).Render("select text") + lipgloss.NewStyle().Foreground(colFaint).Render("    drag to select · press [ ] then y/c/r on a message"),
 	}
 
 	examples := []string{
@@ -306,9 +325,10 @@ func (m *Model) welcome() string {
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		logo,
 		"",
-		tagline,
+		lipgloss.NewStyle().Foreground(colDim).Render("Terminal workspace for building software with AI agents."),
 		"",
-		section("SESSION", infoRows),
+		section("SEASON", infoRows),
+		lipgloss.NewStyle().Foreground(colFaint).Render("  "+seasonHint),
 		"",
 		section("QUICK KEYS", keys),
 		"",

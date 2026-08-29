@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -849,6 +850,68 @@ func TestSeasonsAliasResumes(t *testing.T) {
 		t.Fatalf("/seasons or /resume opened unexpected overlay: %q", m.overlay)
 	}
 	_ = r1
+}
+
+// Launching is always a brand-new season: prior conversations live only
+// behind /seasons, never auto-restored.
+func TestLaunchStartsFreshSeason(t *testing.T) {
+	isolatedUsageHome(t)
+	t.Setenv("USERPROFILE", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+
+	// A previous season exists for this workspace.
+	prev := session.Record{ID: session.NewID(), Workspace: mustCwd(t), Title: "old", History: []map[string]any{{"role": "user", "content": "hi"}}}
+	if err := session.Save(prev); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := New(config.Config{ContextWindow: 200_000, BudgetUSD: -1}, "test", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.sessionID == prev.ID {
+		t.Fatal("launch must not reuse the previous season")
+	}
+	if len(m.blocks) != 0 {
+		t.Fatalf("fresh launch should show the home page with no transcript, got %d blocks", len(m.blocks))
+	}
+	view := m.welcome()
+	if !strings.Contains(view, "NEW SEASON") || !strings.Contains(view, "/seasons") {
+		t.Fatalf("home page missing season affordance: %q", view)
+	}
+
+	// Explicit resume still works.
+	m2, err := New(config.Config{ContextWindow: 200_000, BudgetUSD: -1}, "test", prev.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m2.sessionID != prev.ID {
+		t.Fatalf("explicit resume did not load season %q", prev.ID)
+	}
+}
+
+// The message action menu is reachable without a mouse (keyboard [ ] focus).
+func TestKeyMessageMenuWorksWithoutMouse(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.appendBlock(&block{kind: blockUser, content: "hello there"})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
+	if !m.focusActive {
+		t.Fatal("']' should open message focus without a mouse")
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if !strings.Contains(m.input.Value(), "hello there") {
+		t.Fatalf("revert did not load the message: %q", m.input.Value())
+	}
+}
+
+func mustCwd(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 // The daily cap must refuse to start new turns once the rolling 24h spend
