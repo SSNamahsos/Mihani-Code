@@ -92,13 +92,14 @@ mihani --version
 | Key | Action |
 | --- | --- |
 | `enter` | send prompt (or insert the highlighted palette command) |
-| `ctrl+j` / `alt+enter` | newline inside the composer |
+| `ctrl+j` / `alt+enter` | newline inside the composer (long lines wrap upward) |
 | `/` … | type to filter the command palette |
 | `tab` / `shift+tab` | cycle modes (navigate the palette when it is open) |
 | `↑` / `↓` / `mouse wheel` / `pgup` / `pgdn` | scroll the transcript (arrows stay in the composer while it is multiline) |
-| *select with mouse* | plain drag selects text anywhere — copy natively via right-click or `ctrl+shift+c` |
-| `ctrl+y` or `/copy` | copy Mihani's last reply to the clipboard — shows a "✓ Copied" toast in the status bar |
-| `esc` | interrupt the current request, clear input, close overlays |
+| **click a message** | open Revert / Fork / Copy actions for that message |
+| *select with mouse* | plain drag selects; copy via right-click / `ctrl+shift+c` |
+| `ctrl+y` or `/copy` | copy Mihani's last reply to the clipboard — toast confirmation |
+| `esc` | interrupt request (press **twice** to terminate); otherwise clear input / close overlays |
 | `ctrl+c` | cancel request → deny pending approval → quit |
 
 While a turn is running you can keep typing: additional prompts are queued and sent automatically when the turn completes.
@@ -108,7 +109,7 @@ While a turn is running you can keep typing: additional prompts are queued and s
 - `/help` keyboard shortcuts and commands
 - `/clear` clear the visible conversation
 - `/new` start a fresh session
-- `/resume` pick and restore a previous session
+- `/resume` (aliases `/seasons`, `/sessions`) pick and restore a previous conversation in this folder
 - `/mode [build|plan|research|ask]` show or set the mode
 - `/providers`, `/models`, `/connect` provider management
 - `/git status`, `/git diff` repository inspection
@@ -142,7 +143,7 @@ Switch with `/providers` and `/models`; `/connect` adds any other OpenAI-compati
 
 ### Endpoints without native tool calling
 
-Some gateways strip OpenAI's `tools` parameter, so models there never see file/shell tools. For those, set `"native_tools": false` on the provider (the second built-in endpoint ships this way) and Mihani drives tools through a text protocol instead: the tool catalog joins the system prompt, the model replies with `<tool_call>{...}</tool_call>` blocks, Mihani executes them locally and feeds back `<tool_result>` blocks until the task completes. This works with any chat-completions endpoint — tools become a property of Mihani, not of the API.
+Some gateways strip OpenAI's `tools` parameter, so models there never see file/shell tools. For those, set `"native_tools": false` on the provider (the second built-in endpoint ships this way) and Mihani drives tools through a text protocol instead: the tool catalog joins the system prompt, the model replies with `<tool_call>{...}</tool_call>` blocks, Mihani executes them locally and feeds back `<tool_result>` blocks until the task completes. This works with any chat-completions endpoint — tools become a property of Mihani, not of the API. Providers added via `/connect` that point at a known gateway (`seekai`, `hcnsec`) are auto-detected and default to the text protocol, and `read_file` supports `offset`/`limit` line-paging so large files never hit a truncation wall.
 
 Reasoning models are supported throughout: streamed `reasoning_content` (GLM/DeepSeek style) and Anthropic `thinking` deltas render in a dedicated dimmed thinking block above the answer.
 

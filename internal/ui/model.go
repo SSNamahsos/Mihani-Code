@@ -2,9 +2,11 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,6 +21,57 @@ import (
 	"github.com/SSNamahsos/Mihani-Code/internal/session"
 	"github.com/SSNamahsos/Mihani-Code/internal/usage"
 )
+
+// uiToolCall is the replay-side form of a parsed prompt-tool request.
+type uiToolCall struct {
+	Name  string
+	Input map[string]any
+}
+
+var (
+	uiTaggedCallRe = regexp.MustCompile(`(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>`)
+	uiFencedCallRe = regexp.MustCompile("(?s)```(?:tool_call|json)?\\s*\n(\\{.*?\\})\n```")
+)
+
+func uiToolCalls(text string) ([]uiToolCall, error) {
+	blocks := func(re *regexp.Regexp) []string {
+		out := []string{}
+		for _, m := range re.FindAllStringSubmatch(text, -1) {
+			if len(m) > 1 {
+				out = append(out, m[1])
+			}
+		}
+		return out
+	}(uiTaggedCallRe)
+	if len(blocks) == 0 {
+		blocks = func(re *regexp.Regexp) []string {
+			out := []string{}
+			for _, m := range re.FindAllStringSubmatch(text, -1) {
+				if len(m) > 1 {
+					out = append(out, m[1])
+				}
+			}
+			return out
+		}(uiFencedCallRe)
+	}
+	var out []uiToolCall
+	for _, b := range blocks {
+		var p struct {
+			Name      string         `json:"name"`
+			Arguments map[string]any `json:"arguments"`
+		}
+		if json.Unmarshal([]byte(b), &p) != nil || p.Name == "" {
+			continue
+		}
+		out = append(out, uiToolCall{Name: p.Name, Input: p.Arguments})
+	}
+	return out, nil
+}
+
+func uiStripToolCalls(text string) string {
+	text = uiTaggedCallRe.ReplaceAllString(text, "")
+	return uiFencedCallRe.ReplaceAllString(text, "")
+}
 
 type eventMsg agent.Event
 type resultMsg struct{ err error }
@@ -37,7 +90,8 @@ var commands = []commandItem{
 	{name: "/help", description: "Show keyboard shortcuts and commands"},
 	{name: "/clear", description: "Clear the visible conversation"},
 	{name: "/new", description: "Start a new session"},
-	{name: "/resume", description: "Resume a previous session"},
+	{name: "/resume", description: "Resume a previous conversation"},
+	{name: "/seasons", description: "Switch between conversations in this folder"},
 	{name: "/copy", description: "Copy Mihani's last reply to the clipboard"},
 	{name: "/mode", description: "Switch between build, plan, research, and ask"},
 	{name: "/providers", description: "Show configured AI providers"},
@@ -96,6 +150,7 @@ type Model struct {
 	overlayItems  []overlayItem
 	overlayIndex  int
 	resumeRecords []session.Record
+	msgMenuIndex  int // transcript index of the user message opened from the action menu
 
 	connectOpen   bool
 	connecting    bool
@@ -120,6 +175,11 @@ type Model struct {
 	toast         string  // transient notification shown in the status bar
 	toastUntil    time.Time
 	toastTTL      time.Duration // test hook; zero means defaultToastTTL
+
+	escArmed   bool // double-press confirmation for interrupting a request
+	escArmedAt time.Time
+
+	blockLines []int // rendered row count per transcript block (for hit-testing)
 }
 
 const defaultToastTTL = 2500 * time.Millisecond
@@ -208,48 +268,185 @@ func (m *Model) restore(record session.Record) bool {
 
 func replayTranscript(m *Model, history []map[string]any) {
 	for _, msg := range history {
-		switch fmt.Sprint(msg["role"]) {
-		case "user":
-			if s, ok := msg["content"].(string); ok && s != "" {
-				m.blocks = append(m.blocks, &block{kind: blockUser, content: s})
-			}
-		case "assistant":
+		role := fmt.Sprint(msg["role"])
+		if role == "tool" {
+			m.replayToolResult(msg)
+			continue
+		}
+		if role == "user" {
+			m.replayUser(msg)
+			continue
+		}
+		if role == "assistant" {
 			m.replayAssistant(msg)
 		}
 	}
 }
 
+func (m *Model) replayUser(msg map[string]any) {
+	content := msg["content"]
+	switch c := content.(type) {
+	case string:
+		// Prompt-based tool results are fed back as a user message containing
+		// <tool_result> blocks to a chat-only endpoint — render those as tool
+		// cards, never as user prose.
+		if strings.Contains(c, "<tool_result") {
+			m.replayPromptToolResults(c)
+			return
+		}
+		if strings.TrimSpace(c) != "" {
+			m.blocks = append(m.blocks, &block{kind: blockUser, content: c})
+		}
+	case []map[string]any:
+		m.replayAnthropicToolResults(c)
+	case []any:
+		m.replayAnthropicToolResults(mapsOf(c))
+	}
+}
+
+func mapsOf(items []any) []map[string]any {
+	var out []map[string]any
+	for _, item := range items {
+		if mm, ok := item.(map[string]any); ok {
+			out = append(out, mm)
+		}
+	}
+	return out
+}
+
+// replayAnthropicToolResults turns tool_result content blocks into tool cards.
+func (m *Model) replayAnthropicToolResults(parts []map[string]any) {
+	for _, part := range parts {
+		if fmt.Sprint(part["type"]) != "tool_result" {
+			continue
+		}
+		m.appendToolDoneCard(fmt.Sprint(part["tool_use_id"]), "", fmt.Sprint(part["content"]))
+	}
+}
+
+func (m *Model) replayPromptToolResults(text string) {
+	for _, res := range promptToolResultBlocks(text) {
+		m.appendToolDoneCard(res.id, res.name, res.output)
+	}
+}
+
+type promptResult struct{ id, name, output, status string }
+
+func promptToolResultBlocks(text string) []promptResult {
+	var out []promptResult
+	re := regexp.MustCompile(`(?s)<tool_result name="([^"]*)" id="([^"]*)" status="([^"]*)"[^>]*>\s*(.*?)\s*</tool_result>`)
+	for _, match := range re.FindAllStringSubmatch(text, -1) {
+		out = append(out, promptResult{name: match[1], id: match[2], status: match[3], output: match[4]})
+	}
+	return out
+}
+
+// replayToolResult handles "\"role\": \"tool\"" entries (OpenAI native).
+func (m *Model) replayToolResult(msg map[string]any) {
+	m.appendToolDoneCard(fmt.Sprint(msg["tool_call_id"]), "", fmt.Sprint(msg["content"]))
+}
+
+// appendToolDoneCard adds a settled tool card; a best-effort name is derived
+// from the stored content when the id does not carry one.
+func (m *Model) appendToolDoneCard(id, name, output string) {
+	if name == "" {
+		name = id
+	}
+	b := &block{kind: blockTool, label: name, status: statusDone, finalized: true}
+	if strings.HasPrefix(output, "ERROR") || strings.Contains(output, "declined") {
+		b.status = statusError
+	}
+	b.content = truncatePreview(output)
+	m.blocks = append(m.blocks, b)
+}
+
 func (m *Model) replayAssistant(msg map[string]any) {
+	m.replayOpenAIToolCalls(msg)
 	switch content := msg["content"].(type) {
 	case string:
 		if strings.TrimSpace(content) != "" {
-			m.blocks = append(m.blocks, &block{kind: blockAssistant, content: content, finalized: true})
+			// Prompt-based replies embed <tool_call> blocks inline.
+			calls, _ := uiToolCalls(content)
+			clean := uiStripToolCalls(content)
+			if strings.TrimSpace(clean) != "" {
+				m.blocks = append(m.blocks, &block{kind: blockAssistant, content: clean, finalized: true})
+			}
+			for _, call := range calls {
+				m.blocks = append(m.blocks, &block{
+					kind:      blockTool,
+					label:     call.Name,
+					detail:    summarizeInput(call.Name, call.Input),
+					status:    statusDone,
+					finalized: true,
+				})
+			}
 		}
 	case []map[string]any:
-		var texts []string
-		for _, part := range content {
-			if fmt.Sprint(part["type"]) == "text" {
-				texts = append(texts, fmt.Sprint(part["text"]))
-			}
-		}
-		if joined := strings.Join(texts, "\n\n"); strings.TrimSpace(joined) != "" {
-			m.blocks = append(m.blocks, &block{kind: blockAssistant, content: joined, finalized: true})
-		}
+		m.replayAnthropicAssistant(content)
 	case []any:
-		var texts []string
-		for _, item := range content {
-			part, ok := item.(map[string]any)
-			if !ok {
-				continue
+		m.replayAnthropicAssistant(mapsOf(content))
+	}
+}
+
+func (m *Model) replayAnthropicAssistant(parts []map[string]any) {
+	var texts []string
+	for _, part := range parts {
+		switch fmt.Sprint(part["type"]) {
+		case "text":
+			texts = append(texts, fmt.Sprint(part["text"]))
+		case "tool_use":
+			name := fmt.Sprint(part["name"])
+			input := map[string]any{}
+			if raw, ok := part["input"].(map[string]any); ok {
+				input = raw
 			}
-			if fmt.Sprint(part["type"]) == "text" {
-				texts = append(texts, fmt.Sprint(part["text"]))
-			}
-		}
-		if joined := strings.Join(texts, "\n\n"); strings.TrimSpace(joined) != "" {
-			m.blocks = append(m.blocks, &block{kind: blockAssistant, content: joined, finalized: true})
+			m.blocks = append(m.blocks, &block{
+				kind:      blockTool,
+				label:     name,
+				detail:    summarizeInput(name, input),
+				status:    statusDone,
+				finalized: true,
+			})
 		}
 	}
+	if joined := strings.TrimSpace(strings.Join(texts, "\n\n")); joined != "" {
+		m.blocks = append(m.blocks, &block{kind: blockAssistant, content: joined, finalized: true})
+	}
+}
+
+// replayOpenAIToolCalls turns an assistant message containing native
+// tool_calls into tool cards (used when content carries tool_calls directly).
+func (m *Model) replayOpenAIToolCalls(msg map[string]any) {
+	raw, ok := msg["tool_calls"]
+	if !ok {
+		return
+	}
+	for _, entry := range mapsOfToList(raw) {
+		fn, _ := entry["function"].(map[string]any)
+		name := fmt.Sprint(fn["name"])
+		input := map[string]any{}
+		if args, ok := fn["arguments"].(string); ok {
+			_ = json.Unmarshal([]byte(args), &input)
+		}
+		m.blocks = append(m.blocks, &block{
+			kind:      blockTool,
+			label:     name,
+			detail:    summarizeInput(name, input),
+			status:    statusDone,
+			finalized: true,
+		})
+	}
+}
+
+func mapsOfToList(raw any) []map[string]any {
+	var out []map[string]any
+	switch items := raw.(type) {
+	case []map[string]any:
+		out = items
+	case []any:
+		out = mapsOf(items)
+	}
+	return out
 }
 
 func firstNonEmptyStr(values ...string) string {
@@ -276,9 +473,10 @@ func Run(cfg config.Config, version, resumeID, initialPrompt string) error {
 	if err != nil {
 		return err
 	}
-	// Bracketed paste is enabled by default in bubbletea: multiline pastes
-	// arrive as one insert instead of per-line Enter presses.
-	p := tea.NewProgram(&m, tea.WithAltScreen())
+	// Mouse reporting lets you click a user message for its action menu
+	// (revert/fork/copy). Text selection still works with Shift+drag (or
+	// Ctrl+Shift+drag) in Windows Terminal, VS Code, iTerm2, kitty, etc.
+	p := tea.NewProgram(&m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	m.program = p
 	_, runErr := p.Run()
 	m.agent.Close()
@@ -302,6 +500,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if next, cmd, handled := m.handleKey(x); handled {
 			return next, cmd
+		}
+
+	case tea.MouseMsg:
+		if m.overlay != "" || m.connectOpen || m.keyEditOpen || m.pendingApproval != nil {
+			break
+		}
+		if x.Action == tea.MouseActionPress && x.Button == tea.MouseButtonLeft {
+			if b := m.blockAtScreenY(x.Y); b >= 0 && b < len(m.blocks) && m.blocks[b].kind == blockUser {
+				m.openMessageMenu(b)
+				return m, nil
+			}
 		}
 
 	case eventMsg:
@@ -409,11 +618,23 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, tick(), true
 
 	case key == "esc":
+		if m.busy {
+			// Double-press to confirm: first Esc arms, second Esc terminates.
+			if m.escArmed && time.Since(m.escArmedAt) < 1500*time.Millisecond {
+				m.interrupt()
+				m.escArmed = false
+				m.notify("Request stopped")
+			} else {
+				m.escArmed = true
+				m.escArmedAt = time.Now()
+				m.notify("press esc again to terminate")
+			}
+			return m, tick(), true
+		}
+		m.escArmed = false
 		if m.showCommands() {
 			m.input.Reset()
 			m.commandIndex = 0
-		} else if m.busy {
-			m.interrupt()
 		} else if m.input.Value() != "" {
 			m.input.Reset()
 		}
@@ -727,18 +948,41 @@ func (m *Model) focusedBlockIndex() (int, bool) {
 	return m.focusPos, true
 }
 
+// applyMessageAction executes Revert/Fork/Copy from the message menu.
+// action: 0 = revert, 1 = fork, 2 = copy.
+func (m *Model) applyMessageAction(blockIdx, action int) {
+	m.closeOverlay()
+	m.clearFocus()
+	if blockIdx < 0 || blockIdx >= len(m.blocks) || m.blocks[blockIdx].kind != blockUser {
+		return
+	}
+	text := m.blocks[blockIdx].content
+	switch action {
+	case 0: // revert: prefill composer to edit + resend
+		m.input.Reset()
+		m.input.SetValue(text)
+		m.resizeComposer()
+		m.notify("Loaded into composer — edit and press enter to resend")
+	case 1: // fork: rewind transcript + history, prefill composer
+		m.doFork(blockIdx)
+	case 2: // copy
+		if err := clipboard.WriteAll(text); err != nil {
+			m.notify("Clipboard unavailable: " + err.Error())
+		} else {
+			m.notify("Message copied to clipboard")
+		}
+	}
+	m.relayout()
+	m.refreshView()
+}
+
 // revertToComposer loads the focused prompt back into the editor for a resend.
 func (m *Model) revertToComposer() {
 	idx, ok := m.focusedBlockIndex()
 	if !ok {
 		return
 	}
-	text := m.blocks[idx].content
-	m.clearFocus()
-	m.input.Reset()
-	m.input.SetValue(text)
-	m.resizeComposer()
-	m.notify("Loaded into composer — edit and press enter to resend")
+	m.applyMessageAction(idx, 0)
 }
 
 // forkFromMessage rewinds the conversation to just before the focused prompt:
@@ -746,9 +990,14 @@ func (m *Model) revertToComposer() {
 // composer so an alternate path can be taken.
 func (m *Model) forkFromMessage() {
 	idx, ok := m.focusedBlockIndex()
+	m.clearFocus()
 	if !ok {
 		return
 	}
+	m.doFork(idx)
+}
+
+func (m *Model) doFork(idx int) {
 	text := m.blocks[idx].content
 
 	ordinal := 0 // which user message (1-based) this block represents
@@ -782,7 +1031,6 @@ func (m *Model) forkFromMessage() {
 	m.activeRaw.Reset()
 	m.stickBottom = true
 
-	m.clearFocus()
 	m.input.Reset()
 	m.input.SetValue(text)
 	m.resizeComposer()
@@ -1059,12 +1307,16 @@ func truncatePreview(preview string) string {
 func (m *Model) refreshView() {
 	w := maxInt(20, m.width-2)
 	rendered := make([]string, 0, len(m.blocks))
+	m.blockLines = m.blockLines[:0]
 	prevKind := blockKind(-1)
 	for _, b := range m.blocks {
 		text := b.render(w, m.spinnerGlyph())
 		if len(rendered) > 0 && !(prevKind == blockTool && b.kind == blockTool) {
+			// every block is separated by exactly one blank line
 			rendered = append(rendered, "")
+			m.blockLines = append(m.blockLines, 1) // the separator row itself
 		}
+		m.blockLines = append(m.blockLines, strings.Count(text, "\n")+1)
 		rendered = append(rendered, text)
 		prevKind = b.kind
 	}
@@ -1072,6 +1324,24 @@ func (m *Model) refreshView() {
 	if m.stickBottom {
 		m.view.GotoBottom()
 	}
+}
+
+// blockAtScreenY maps a terminal row inside the transcript to a block index,
+// accounting for the header offset and the viewport's scroll position.
+func (m *Model) blockAtScreenY(y int) int {
+	contentRow := y - 1 // 1 header row
+	if contentRow < 0 {
+		return -1
+	}
+	target := m.view.YOffset + contentRow
+	cum := 0
+	for i, lines := range m.blockLines {
+		if target < cum+lines {
+			return i
+		}
+		cum += lines
+	}
+	return -1
 }
 
 func (m *Model) spinnerGlyph() string {

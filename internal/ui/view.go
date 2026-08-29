@@ -30,9 +30,11 @@ func (m *Model) composerHeight() int {
 	return m.input.Height() + 2 // rounded border adds two rows
 }
 
-// resizeComposer grows the editor with its content up to a cap.
+// resizeComposer grows the editor with its content up to a cap. Both explicit
+// newlines and soft-wrapped overflow count, so long typing wraps upward (to
+// the next row) instead of running off the right edge.
 func (m *Model) resizeComposer() {
-	lines := strings.Count(m.input.Value(), "\n") + 1
+	lines := wrappedLineCount(m.input.Value(), maxInt(12, m.width-8))
 	if lines > maxComposerLines {
 		lines = maxComposerLines
 	}
@@ -43,6 +45,24 @@ func (m *Model) resizeComposer() {
 		m.input.SetHeight(lines)
 		m.relayout()
 	}
+}
+
+// wrappedLineCount estimates how many terminal rows value occupies, accounting
+// for soft wrapping at the given width per logical line.
+func wrappedLineCount(value string, width int) int {
+	if width < 8 {
+		width = 8
+	}
+	total := 0
+	for _, line := range strings.Split(value, "\n") {
+		display := lipgloss.Width(strings.TrimRight(line, " "))
+		rows := 1 + display/width
+		if display%width == 0 && display > 0 {
+			rows = display / width
+		}
+		total += rows
+	}
+	return total
 }
 
 func (m *Model) paletteHeight() int {
@@ -265,8 +285,8 @@ func (m *Model) welcome() string {
 	keys := []string{
 		lipgloss.NewStyle().Foreground(colText).Render("/ commands") + lipgloss.NewStyle().Foreground(colFaint).Render("   browse everything mihani can do"),
 		lipgloss.NewStyle().Foreground(colText).Render("tab modes") + lipgloss.NewStyle().Foreground(colFaint).Render("     build, plan, research, or ask"),
-		lipgloss.NewStyle().Foreground(colText).Render("[ ] inspect") + lipgloss.NewStyle().Foreground(colFaint).Render("   jump between your messages: y copy · f fork · r revert"),
-		lipgloss.NewStyle().Foreground(colText).Render("↑↓ / pgup") + lipgloss.NewStyle().Foreground(colFaint).Render("    scroll history · drag to select and copy any text"),
+		lipgloss.NewStyle().Foreground(colText).Render("click a msg") + lipgloss.NewStyle().Foreground(colFaint).Render("   revert / fork / copy · or [ ] keys while composing"),
+		lipgloss.NewStyle().Foreground(colText).Render("↑↓ / pgup") + lipgloss.NewStyle().Foreground(colFaint).Render("    scroll history · shift+drag to select and copy"),
 	}
 
 	examples := []string{

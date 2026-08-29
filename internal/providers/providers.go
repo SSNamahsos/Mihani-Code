@@ -51,5 +51,12 @@ func DiscoverModels(client *http.Client, baseURL, apiKey string) ([]string, erro
 }
 
 func NormalizeProvider(name, baseURL, apiKey string, models []string) config.Provider {
-	return config.Provider{Label: name, Type: "openai", BaseURL: strings.TrimRight(baseURL, "/"), APIKey: apiKey, Models: models}
+	return config.Provider{
+		Label:       name,
+		Type:        "openai",
+		BaseURL:     strings.TrimRight(baseURL, "/"),
+		APIKey:      apiKey,
+		Models:      models,
+		NativeTools: config.NativeToolsDefault(baseURL),
+	}
 }

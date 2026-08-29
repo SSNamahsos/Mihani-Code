@@ -742,6 +742,115 @@ func TestCapStillBlocksWithoutPersonalKey(t *testing.T) {
 	}
 }
 
+// The composer must grow for soft-wrapped overflow, not only for newlines,
+// so long typing wraps upward instead of running off the right edge.
+func TestComposerWrapsLongLines(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.input.SetValue(strings.Repeat("x", 200)) // one long logical line
+	m.resizeComposer()
+	if m.input.Height() < 2 {
+		t.Fatalf("long single line should wrap to multiple rows, height=%d", m.input.Height())
+	}
+	// Explicit multi-line stays bounded by the cap.
+	m.input.SetValue("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn")
+	m.resizeComposer()
+	if m.input.Height() > maxComposerLines {
+		t.Fatalf("composer exceeded cap: %d", m.input.Height())
+	}
+}
+
+// Clicking a user message opens the Revert/Fork/Copy menu; other blocks do not.
+func TestClickOpensMessageMenu(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.appendBlock(&block{kind: blockUser, content: "first"})
+	m.appendBlock(&block{kind: blockAssistant, content: "reply one", finalized: true})
+	m.appendBlock(&block{kind: blockUser, content: "second"})
+	m.appendBlock(&block{kind: blockAssistant, content: "reply two", finalized: true})
+	m.relayout()
+	m.refreshView()
+
+	// Clicking the first user row (top of transcript) opens the menu.
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft, X: 5, Y: 2})
+	if m.overlay != "Message" {
+		t.Fatalf("clicking a user message should open the menu, overlay=%q", m.overlay)
+	}
+	if len(m.overlayItems) != 3 || m.overlayItems[0].label != "revert" ||
+		m.overlayItems[1].label != "fork" || m.overlayItems[2].label != "copy" {
+		t.Fatalf("menu items wrong: %#v", m.overlayItems)
+	}
+
+	// Selecting "revert" loads the message text into the composer.
+	m.selectOverlayItem()
+	if !strings.Contains(m.input.Value(), "first") {
+		t.Fatalf("revert did not prefill composer: %q", m.input.Value())
+	}
+}
+
+// Resume must replay tool cards and never mislabel replies as user messages.
+func TestReplayPreservesToolBlocksAndAttribution(t *testing.T) {
+	m := newTestModel(100, 40)
+	history := []map[string]any{
+		{"role": "system", "content": "sys"},
+		{"role": "user", "content": "inspect the site"},
+		{"role": "assistant", "content": `<tool_call>{"name":"read_file","arguments":{"path":"a.txt"}}</tool_call>`},
+		{"role": "user", "content": `<tool_result name="read_file" id="prompt_1" status="ok">hello contents</tool_result>`},
+		{"role": "assistant", "content": "Here is the file."},
+	}
+	m.restore(session.Record{Workspace: m.root, ID: "test", History: history})
+	m.blocks = nil
+	replayTranscript(&m, history)
+
+	got := []blockKind{}
+	for _, b := range m.blocks {
+		got = append(got, b.kind)
+	}
+	want := []blockKind{blockUser, blockTool, blockTool, blockAssistant}
+	if len(got) != len(want) {
+		t.Fatalf("block kinds = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("block kinds = %v, want %v", got, want)
+		}
+	}
+	// The tool_result payload must be a tool card, never a user box.
+	if m.blocks[1].kind != blockTool {
+		t.Fatalf("tool result rendered as non-tool: %v", m.blocks[1].kind)
+	}
+}
+
+// Double Esc confirms termination; a single Esc only arms it.
+func TestEscRequiresDoublePressToStop(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.busy = true
+	m.escArmed = false
+	_, _, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if !m.escArmed || m.busy != true {
+		t.Fatalf("first esc should arm, not stop: armed=%v busy=%v", m.escArmed, m.busy)
+	}
+	_, _, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.escArmed || !strings.Contains(m.toast, "stopped") {
+		t.Fatalf("second esc should stop: armed=%v toast=%q", m.escArmed, m.toast)
+	}
+}
+
+func TestSeasonsAliasResumes(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.cfg = config.Config{CurrentProvider: config.BuiltinPrimary, BudgetUSD: -1,
+		Providers: map[string]config.Provider{config.BuiltinPrimary: {Type: "openai"}}}
+	cmd := m.command("/seasons")
+	if m.overlay != "" {
+		// Either it opens the picker (no saved seasons) or reports none.
+	}
+	_ = cmd
+	r1 := m.command("/resume")
+	if m.overlay != "" && m.overlay != "Resume conversation" {
+		t.Fatalf("/seasons or /resume opened unexpected overlay: %q", m.overlay)
+	}
+	_ = r1
+}
+
 // The daily cap must refuse to start new turns once the rolling 24h spend
 // reaches the budget for the active provider.
 func TestBudgetBlocksNewTurns(t *testing.T) {

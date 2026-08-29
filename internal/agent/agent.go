@@ -568,7 +568,9 @@ func (a *Agent) client() *http.Client {
 	if a.Client != nil {
 		return a.Client
 	}
-	return http.DefaultClient
+	// Timeout so a hung upstream can never leave the UI "thinking" forever;
+	// the request context still cancels immediately on user interrupt.
+	return &http.Client{Timeout: 3 * time.Minute}
 }
 
 func (a *Agent) ensureMCP(ctx context.Context, emit func(Event)) error {

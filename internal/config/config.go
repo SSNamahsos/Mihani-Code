@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/SSNamahsos/Mihani-Code/internal/pricing"
 	"github.com/SSNamahsos/Mihani-Code/internal/secrets"
@@ -184,6 +185,19 @@ func containsModel(models []string, model string) bool {
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+// NativeToolsDefault decides whether a newly connected endpoint should use
+// native function calling. Gateways known to strip the tools parameter (so
+// files become unreadable) are steered to the prompt-based protocol.
+func NativeToolsDefault(baseURL string) *bool {
+	host := strings.ToLower(baseURL)
+	for _, known := range []string{"seekai", "hcnsec"} {
+		if strings.Contains(host, known) {
+			return boolPtr(false)
+		}
+	}
+	return nil // unknown → native
+}
 
 // LegacyProviderID resolves an id from an earlier release to its current
 // built-in replacement. ok is false for unknown or non-legacy ids.

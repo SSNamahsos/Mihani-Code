@@ -35,6 +35,18 @@ func (m *Model) closeOverlay() {
 	m.overlayItems = nil
 	m.overlayIndex = 0
 	m.resumeRecords = nil
+	m.msgMenuIndex = 0
+}
+
+// openMessageMenu shows Revert / Fork / Copy actions for a user message,
+// reached by mouse-click on the message box.
+func (m *Model) openMessageMenu(blockIdx int) {
+	m.msgMenuIndex = blockIdx
+	m.openOverlay("Message", []overlayItem{
+		{label: "revert", detail: "load this message into the composer to edit and resend"},
+		{label: "fork", detail: "branch a new conversation from this point"},
+		{label: "copy", detail: "copy this message to the clipboard"},
+	})
 }
 
 func (m *Model) updateOverlayKey(key tea.KeyMsg) tea.Cmd {
@@ -58,6 +70,9 @@ func (m *Model) updateOverlayKey(key tea.KeyMsg) tea.Cmd {
 // selectOverlayItem applies the action bound to the active overlay.
 func (m *Model) selectOverlayItem() {
 	switch {
+	case m.overlay == "Message":
+		m.applyMessageAction(m.msgMenuIndex, m.overlayIndex)
+
 	case m.overlay == "Modes":
 		if m.overlayIndex < len(modes) {
 			m.modeIndex = m.overlayIndex
@@ -220,7 +235,7 @@ func (m *Model) command(s string) tea.Cmd {
 		m.appendBlock(&block{kind: blockInfo, content: "started new session " + shortID(m.sessionID)})
 		m.relayout()
 
-	case "/resume":
+	case "/resume", "/seasons", "/sessions":
 		records, err := session.List()
 		if err != nil || len(records) == 0 {
 			m.appendBlock(&block{kind: blockInfo, content: "no saved sessions found"})
