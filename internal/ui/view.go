@@ -315,6 +315,7 @@ func (m *Model) welcome() string {
 		"❯ explain what this project does",
 		"❯ find and fix the failing test",
 		"❯ refactor config loading into its own package",
+		"❯ add tests to the biggest package — watch the todo list update",
 	}
 
 	section := func(title string, rows []string) string {

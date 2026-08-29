@@ -7,6 +7,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/truncate"
+
+	"github.com/SSNamahsos/Mihani-Code/internal/tools"
 )
 
 type blockKind int
@@ -15,6 +17,7 @@ const (
 	blockUser blockKind = iota
 	blockAssistant
 	blockTool
+	blockTodo
 	blockInfo
 	blockError
 	blockThinking
@@ -74,6 +77,8 @@ func (b *block) render(w int, spinnerChar string) string {
 		b.rendered = b.renderThinking(w, spinnerChar)
 	case blockTool:
 		b.rendered = b.renderTool(w, spinnerChar)
+	case blockTodo:
+		b.rendered = b.renderTodo(w, spinnerChar)
 	case blockInfo:
 		b.rendered = lipgloss.NewStyle().Foreground(colDim).
 			Render(indentBlock(wrap(b.content, w-2), 2))
@@ -258,6 +263,49 @@ func (b *block) renderTool(w int, spinnerChar string) string {
 		Render(out)
 }
 
+// renderTodo shows the live task list: one line per item, tinted by status,
+// inside the same card chrome as tool activity.
+func (b *block) renderTodo(w int, spinnerChar string) string {
+	var header string
+	if b.status == statusRunning && !b.finalized {
+		spin := ""
+		if spinnerChar != "" {
+			spin = " " + lipgloss.NewStyle().Foreground(colFaint).Render(spinnerChar)
+		}
+		header = lipgloss.NewStyle().Bold(true).Foreground(colAmber).Render("☑ todos") + spin
+	} else {
+		summary := lipgloss.NewStyle().Foreground(colFaint).Render(" "+b.detail)
+		header = lipgloss.NewStyle().Bold(true).Foreground(colGreen).Render("☑ todos") + summary
+	}
+	var body strings.Builder
+	for i, line := range strings.Split(strings.TrimRight(b.content, "\n"), "\n") {
+		if i > 0 {
+			body.WriteString("\n")
+		}
+		switch {
+		case strings.HasPrefix(line, "✓"):
+			body.WriteString(lipgloss.NewStyle().Foreground(colGreen).Render(line))
+		case strings.HasPrefix(line, "◐"):
+			body.WriteString(lipgloss.NewStyle().Foreground(colAmber).Render(line))
+		default:
+			body.WriteString(lipgloss.NewStyle().Foreground(colDim).Render(line))
+		}
+	}
+	if b.content == "" {
+		body.WriteString(lipgloss.NewStyle().Foreground(colFaint).Render("(updating…)"))
+	}
+	borderColor := colBorder
+	if b.status == statusError {
+		borderColor = colRed
+	}
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(0, 1).
+		Width(maxInt(14, w-2)).
+		Render(header + "\n" + body.String())
+}
+
 const maxPreviewLines = 14
 
 // colorizeDiff tints unified-diff lines and caps their height.
@@ -298,6 +346,24 @@ func maxInt(a, b int) int {
 	return b
 }
 
+// todoSummaryFromInput renders "N/M done" from a todo_write call's input.
+func todoSummaryFromInput(input map[string]any) string {
+	list, err := tools.ParseTodoList(input["todos"])
+	if err != nil {
+		return ""
+	}
+	return tools.TodoSummary(list)
+}
+
+// todoContentFromInput formats the card body for a todo_write call.
+func todoContentFromInput(input map[string]any) (string, bool) {
+	list, err := tools.ParseTodoList(input["todos"])
+	if err != nil {
+		return "", false
+	}
+	return tools.FormatTodoList(list), true
+}
+
 // summarizeInput builds a short human-readable description of a tool call.
 func summarizeInput(name string, input map[string]any) string {
 	get := func(keys ...string) string {
@@ -319,6 +385,8 @@ func summarizeInput(name string, input map[string]any) string {
 		return get("command")
 	case "ask_user":
 		return get("question")
+	case "todo_write":
+		return todoSummaryFromInput(input)
 	case "read_file", "write_file", "edit_file", "delete_file":
 		return get("path")
 	case "search_files":

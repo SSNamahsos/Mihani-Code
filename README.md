@@ -8,6 +8,7 @@ Mihani Code is a native Go terminal AI coding agent. It provides a focused works
 - Streaming OpenAI-compatible responses with parallel tool-call reassembly
 - Multi-turn tool execution loops: read, write, edit, delete (files or whole directories), search files plus shell commands
 - **Interactive questions**: the model can pause mid-task and ask you a question — options appear as a menu you pick from, or you type a custom answer; it may ask several in a row
+- **Live todo list**: the agent maintains a visible task card (`todo_write`) that updates in place with ✓/◐/○ per item as work progresses
 - Two built-in endpoints (`hcnsec`, `seekai`) with curated default models; `/connect` discovers models from any OpenAI-compatible endpoint
 - **Live cost meter**: real input/output token accounting, per-model $ pricing, rolling 24h spend per provider
 - **Daily budget enforcement**: turns are refused once a provider reaches its 24h cap (default $10)

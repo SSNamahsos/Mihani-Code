@@ -34,6 +34,12 @@ var Registry = []Tool{
 		"question": stringProperty("The question to ask the user"),
 		"options":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Short answer choices to show as menu items (0-6). Omit for a free-text question."},
 	}, "question")},
+	{Name: "todo_write", Description: "Create or update the task list the user watches in the terminal. Send the FULL current list every call (statuses: pending, in_progress, done). Use it for multi-step work so the user sees what is done, running, and next; update statuses as you progress and mark items done the moment they are verified.", Schema: objectSchema(map[string]any{
+		"todos": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{
+			"content": stringProperty("Task description"),
+			"status":  map[string]any{"type": "string", "enum": []any{"pending", "in_progress", "done"}, "description": "pending | in_progress | done"},
+		}, "required": []any{"content"}}, "description": "The complete todo list, in order."},
+	}, "todos")},
 	{Name: "bash", Description: "Run a shell command in the workspace", Dangerous: true, Schema: objectSchema(map[string]any{"command": stringProperty("Command to execute")}, "command")},
 }
 
@@ -236,6 +242,12 @@ func (r Runner) Run(ctx context.Context, name string, in map[string]any) string 
 			return "ERROR: " + e.Error()
 		}
 		return "OK: deleted " + p
+	case "todo_write":
+		list, e := ParseTodoList(in["todos"])
+		if e != nil {
+			return "ERROR: " + e.Error()
+		}
+		return "OK: " + FormatTodoList(list)
 	case "bash":
 		commandCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
@@ -345,6 +357,80 @@ func limit(s string, n int) string {
 }
 
 const maxSearchFileSize = 512 * 1024
+
+// Todo list support (todo_write tool): one self-contained task entry.
+type Todo struct {
+	Content string
+	Status  string // pending | in_progress | done
+}
+
+var todoStatuses = map[string]bool{"pending": true, "in_progress": true, "done": true}
+
+var todoGlyphs = map[string]string{
+	"done":        "\u2713",
+	"in_progress": "\u25d0",
+	"pending":     "\u25cb",
+}
+
+// ParseTodoList normalizes the todos argument (JSON []any of maps).
+func ParseTodoList(v any) ([]Todo, error) {
+	var items []map[string]any
+	switch raw := v.(type) {
+	case []map[string]any:
+		items = raw
+	case []any:
+		for _, item := range raw {
+			if mm, ok := item.(map[string]any); ok {
+				items = append(items, mm)
+			}
+		}
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("todos must be a non-empty array")
+	}
+	out := make([]Todo, 0, len(items))
+	for i, item := range items {
+		content := strings.TrimSpace(fmt.Sprint(item["content"]))
+		if content == "" || content == "<nil>" {
+			return nil, fmt.Errorf("todo %d is missing content", i+1)
+		}
+		status := strings.ToLower(strings.TrimSpace(fmt.Sprint(item["status"])))
+		if !todoStatuses[status] {
+			status = "pending"
+		}
+		out = append(out, Todo{Content: content, Status: status})
+	}
+	return out, nil
+}
+
+// FormatTodoList renders "done/total" plus one glyph line per task. Used as
+// the tool result (model + session replay) and the UI card body.
+func FormatTodoList(list []Todo) string {
+	done := 0
+	var b strings.Builder
+	for _, item := range list {
+		if item.Status == "done" {
+			done++
+		}
+		glyph, ok := todoGlyphs[item.Status]
+		if !ok {
+			glyph = todoGlyphs["pending"]
+		}
+		fmt.Fprintf(&b, "%s %s\n", glyph, item.Content)
+	}
+	return fmt.Sprintf("%d/%d done\n%s", done, len(list), strings.TrimRight(b.String(), "\n"))
+}
+
+// TodoSummary is a one-line description for card headers and tool details.
+func TodoSummary(list []Todo) string {
+	done := 0
+	for _, item := range list {
+		if item.Status == "done" {
+			done++
+		}
+	}
+	return fmt.Sprintf("%d/%d done", done, len(list))
+}
 
 var skipDirs = map[string]bool{
 	".git": true, "node_modules": true, "vendor": true,

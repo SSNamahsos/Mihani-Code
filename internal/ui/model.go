@@ -361,12 +361,24 @@ func (m *Model) replayToolResult(msg map[string]any) {
 }
 
 // appendToolDoneCard adds a settled tool card; a best-effort name is derived
-// from the stored content when the id does not carry one.
+// from the stored content when the id does not carry one. todo_write results
+// are recognized by shape so resumed sessions rebuild the live list card.
 func (m *Model) appendToolDoneCard(id, name, output string) {
 	if name == "" {
 		name = id
 	}
+	if name != "todo_write" && strings.HasPrefix(output, "OK: ") &&
+		(strings.Contains(output, "\n\u2713") || strings.Contains(output, "\n\u25cb") || strings.Contains(output, "\n\u25d0")) {
+		name = "todo_write"
+	}
 	b := &block{kind: blockTool, label: name, status: statusDone, finalized: true}
+	if name == "todo_write" {
+		b.kind = blockTodo
+		b.detail = firstLine(output)
+		if strings.HasPrefix(output, "OK: ") {
+			output = strings.TrimPrefix(output, "OK: ")
+		}
+	}
 	if strings.HasPrefix(output, "ERROR") || strings.Contains(output, "declined") {
 		b.status = statusError
 	}
@@ -386,13 +398,17 @@ func (m *Model) replayAssistant(msg map[string]any) {
 				m.blocks = append(m.blocks, &block{kind: blockAssistant, content: clean, finalized: true})
 			}
 			for _, call := range calls {
-				m.blocks = append(m.blocks, &block{
+				b := &block{
 					kind:      blockTool,
 					label:     call.Name,
 					detail:    summarizeInput(call.Name, call.Input),
 					status:    statusDone,
 					finalized: true,
-				})
+				}
+				if call.Name == "todo_write" {
+					b.kind = blockTodo
+				}
+				m.blocks = append(m.blocks, b)
 			}
 		}
 	case []map[string]any:
@@ -414,13 +430,17 @@ func (m *Model) replayAnthropicAssistant(parts []map[string]any) {
 			if raw, ok := part["input"].(map[string]any); ok {
 				input = raw
 			}
-			m.blocks = append(m.blocks, &block{
+			b := &block{
 				kind:      blockTool,
 				label:     name,
 				detail:    summarizeInput(name, input),
 				status:    statusDone,
 				finalized: true,
-			})
+			}
+			if name == "todo_write" {
+				b.kind = blockTodo
+			}
+			m.blocks = append(m.blocks, b)
 		}
 	}
 	if joined := strings.TrimSpace(strings.Join(texts, "\n\n")); joined != "" {
@@ -442,13 +462,17 @@ func (m *Model) replayOpenAIToolCalls(msg map[string]any) {
 		if args, ok := fn["arguments"].(string); ok {
 			_ = json.Unmarshal([]byte(args), &input)
 		}
-		m.blocks = append(m.blocks, &block{
+		b := &block{
 			kind:      blockTool,
 			label:     name,
 			detail:    summarizeInput(name, input),
 			status:    statusDone,
 			finalized: true,
-		})
+		}
+		if name == "todo_write" {
+			b.kind = blockTodo
+		}
+		m.blocks = append(m.blocks, b)
 	}
 }
 
@@ -1205,13 +1229,33 @@ func (m *Model) handle(e agent.Event) {
 	case "tool_start", "tool":
 		m.closeActiveAssistant()
 		m.closeActiveThinking()
-		m.blocks = append(m.blocks, &block{
-			kind:   blockTool,
-			label:  e.Tool,
-			detail: summarizeInput(e.Tool, e.Input),
-			status: statusRunning,
-		})
-		m.activeTool = len(m.blocks) - 1
+		idx := -1
+		if e.Tool == "todo_write" {
+			// Reuse the existing card so the list updates in place.
+			if i := m.lastTodoIndex(); i >= 0 {
+				b := m.blocks[i]
+				b.status = statusRunning
+				b.finalized = false
+				b.invalidate()
+				idx = i
+			} else {
+				m.blocks = append(m.blocks, &block{
+					kind: blockTodo, label: "todos",
+					detail: summarizeInput(e.Tool, e.Input),
+					status: statusRunning,
+				})
+				idx = len(m.blocks) - 1
+			}
+		} else {
+			m.blocks = append(m.blocks, &block{
+				kind:   blockTool,
+				label:  e.Tool,
+				detail: summarizeInput(e.Tool, e.Input),
+				status: statusRunning,
+			})
+			idx = len(m.blocks) - 1
+		}
+		m.activeTool = idx
 		m.status = "running tool"
 		m.activity = e.Tool
 		m.refreshView()
@@ -1240,6 +1284,13 @@ func (m *Model) handle(e agent.Event) {
 			default:
 				b.status = statusDone
 			}
+			if b.kind == blockTodo {
+				if content, ok := todoContentFromInput(e.Input); ok {
+					b.content = content
+					b.detail = todoSummaryFromInput(e.Input)
+				}
+			}
+			b.finalized = true
 			b.invalidate()
 			m.activeTool = -1
 			m.refreshView()
@@ -1284,6 +1335,17 @@ func (m *Model) handle(e agent.Event) {
 		m.activity = ""
 		m.refreshView()
 	}
+}
+
+// lastTodoIndex returns the transcript index of the most recent todo card, or
+// -1 when the list has not been created yet.
+func (m *Model) lastTodoIndex() int {
+	for i := len(m.blocks) - 1; i >= 0; i-- {
+		if m.blocks[i].kind == blockTodo {
+			return i
+		}
+	}
+	return -1
 }
 
 // closeActiveThinking freezes the live reasoning block.

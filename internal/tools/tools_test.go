@@ -183,3 +183,33 @@ func TestRunnerDeletesFilesAndDirectories(t *testing.T) {
 		t.Fatalf("root delete should be refused, got %q", got)
 	}
 }
+
+func TestTodoWriteFormatsList(t *testing.T) {
+	in := map[string]any{"todos": []any{
+		map[string]any{"content": "read code", "status": "done"},
+		map[string]any{"content": "rewrite", "status": "in_progress"},
+		map[string]any{"content": "tests"},
+	}}
+	got := (Runner{Root: t.TempDir()}).Run(context.Background(), "todo_write", in)
+	if !strings.HasPrefix(got, "OK: 1/3 done") {
+		t.Fatalf("unexpected result header: %q", got)
+	}
+	for _, want := range []string{"✓ read code", "◐ rewrite", "○ tests"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing line %q in: %q", want, got)
+		}
+	}
+}
+
+func TestParseTodoListRejectsBadInput(t *testing.T) {
+	if _, err := ParseTodoList([]any{}); err == nil {
+		t.Fatal("empty list should be rejected")
+	}
+	if _, err := ParseTodoList([]any{map[string]any{"status": "done"}}); err == nil {
+		t.Fatal("item without content should be rejected")
+	}
+	list, err := ParseTodoList([]any{map[string]any{"content": "x", "status": "BANANA"}})
+	if err != nil || list[0].Status != "pending" {
+		t.Fatalf("unknown status should normalize to pending, got %+v err=%v", list, err)
+	}
+}

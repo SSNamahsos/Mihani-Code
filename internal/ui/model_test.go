@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"strings"
@@ -1158,5 +1159,106 @@ func TestAskUserEscDismisses(t *testing.T) {
 		}
 	default:
 		t.Fatal("dismissal answer not delivered")
+	}
+}
+
+// End-to-end regression: a real mouse press+release piped through the tea
+// program's input parser must open the message action menu on a user message.
+// This exercises the production mouse path, not just Update().
+func TestClickMessageEndToEnd(t *testing.T) {
+	isolatedUsageHome(t)
+	m := newTestModel(100, 40)
+	m.appendBlock(&block{kind: blockUser, content: "click me"})
+	m.refreshView()
+
+	pr, pw := io.Pipe()
+	p := tea.NewProgram(&m,
+		tea.WithInput(pr),
+		tea.WithOutput(io.Discard),
+		tea.WithoutRenderer(),
+		tea.WithoutCatchPanics(),
+		tea.WithMouseCellMotion(),
+	)
+
+	var opened bool
+	go func() {
+		_, _ = pw.Write([]byte("\x1b[<0;5;2M")) // SGR press, left button, (5,2)
+		time.Sleep(100 * time.Millisecond)
+		_, _ = pw.Write([]byte("\x1b[<0;5;2m")) // SGR release, same cell
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if m.overlay == "Message" { //nolint:staticcheck // test-only cross-goroutine flag
+				opened = true
+				_, _ = pw.Write([]byte("\x1b")) // esc closes the menu
+				_, _ = pw.Write([]byte("\x03")) // quit
+				return
+			}
+			time.Sleep(15 * time.Millisecond)
+		}
+		_, _ = pw.Write([]byte("\x03"))
+	}()
+
+	_, _ = p.Run()
+	pw.Close()
+	if !opened {
+		t.Fatal("clicking a user message did not open the action menu through the real input path")
+	}
+}
+
+// todo_write: the card updates in place across successive calls.
+func TestTodoCardUpdatesInPlace(t *testing.T) {
+	m := newTestModel(100, 40)
+	in1 := map[string]any{"todos": []any{
+		map[string]any{"content": "step one", "status": "pending"},
+	}}
+	m.handle(agent.Event{Kind: "tool_start", Tool: "todo_write", Input: in1})
+	m.handle(agent.Event{Kind: "tool_done", Tool: "todo_write", ToolResult: "OK: 0/1 done\n○ step one", Input: in1})
+	if len(m.blocks) != 1 || m.blocks[0].kind != blockTodo {
+		t.Fatalf("expected one todo card, got %d blocks", len(m.blocks))
+	}
+	if !strings.Contains(m.blocks[0].content, "○ step one") {
+		t.Fatalf("todo card content: %q", m.blocks[0].content)
+	}
+
+	in2 := map[string]any{"todos": []any{
+		map[string]any{"content": "step one", "status": "done"},
+		map[string]any{"content": "step two", "status": "in_progress"},
+	}}
+	m.handle(agent.Event{Kind: "tool_start", Tool: "todo_write", Input: in2})
+	m.handle(agent.Event{Kind: "tool_done", Tool: "todo_write", ToolResult: "OK: 1/2 done\n✓ step one\n◐ step two", Input: in2})
+	if len(m.blocks) != 1 {
+		t.Fatalf("todo card should update in place, now %d blocks", len(m.blocks))
+	}
+	b := m.blocks[0]
+	if !strings.Contains(b.content, "✓ step one") || !strings.Contains(b.content, "◐ step two") {
+		t.Fatalf("todo card not updated: %q", b.content)
+	}
+	if !strings.Contains(b.detail, "1/2") {
+		t.Fatalf("todo summary missing: %q", b.detail)
+	}
+}
+
+// Resumed sessions must rebuild the todo card from stored tool results.
+func TestReplayRebuildsTodoCard(t *testing.T) {
+	m := newTestModel(100, 40)
+	history := []map[string]any{
+		{"role": "assistant", "content": "planning", "tool_calls": []any{
+			map[string]any{"id": "call_1", "type": "function", "function": map[string]any{
+				"name": "todo_write", "arguments": `{"todos":[{"content":"a","status":"done"}]}`,
+			}},
+		}},
+		{"role": "tool", "tool_call_id": "call_1", "content": "OK: 1/1 done\n✓ a"},
+	}
+	replayTranscript(&m, history)
+	n := 0
+	var last *block
+	for _, b := range m.blocks {
+		if b.kind == blockTodo {
+			n++
+			last = b
+		}
+	}
+	if n < 2 || last == nil || !strings.Contains(last.content, "✓ a") {
+		t.Fatalf("expected rebuilt todo card with list, got %d todo cards in %d blocks", n, len(m.blocks))
 	}
 }
