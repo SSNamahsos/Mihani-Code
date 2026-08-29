@@ -151,7 +151,9 @@ func (m *Model) selectOverlayItem() {
 }
 
 func (m *Model) overlayView() string {
-	boxWidth := minInt(80, maxInt(50, m.width-8))
+	// Full width: a narrow centered box clips the detail column mid-word and
+	// the terminal paints the cut as broken fragments ("e....", "poin...").
+	boxWidth := maxInt(60, m.width-2)
 	rows := make([]string, 0, len(m.overlayItems))
 	if len(rows) == 0 && len(m.overlayItems) == 0 {
 		rows = append(rows, lipgloss.NewStyle().Foreground(colDim).Render("nothing to show"))
@@ -178,7 +180,7 @@ func (m *Model) overlayView() string {
 			if i == m.overlayIndex {
 				detailStyle = lipgloss.NewStyle().Foreground(colDim)
 			}
-			line += strings.Repeat(" ", pad) + detailStyle.Render(truncateText(item.detail, boxWidth-40))
+			line += strings.Repeat(" ", pad) + detailStyle.Render(truncateWord(item.detail, boxWidth-40))
 		}
 		rows = append(rows, style.Render(line))
 	}
@@ -253,7 +255,7 @@ func (m *Model) command(s string) tea.Cmd {
 		}
 		if len(here) == 0 {
 			m.appendBlock(&block{kind: blockInfo,
-				content: fmt.Sprintf("no previous conversations in %s\n(%d session(s) exist in other folders — open those folders to reach them)",
+				content: fmt.Sprintf("no previous conversations in %s\n(%d session(s) exist in other folders - open those folders to reach them)",
 					shortPath(m.root), len(elsewhere))})
 			return nil
 		}
@@ -360,7 +362,7 @@ func (m *Model) command(s string) tea.Cmd {
 	case "/mcp":
 		servers := mcp.Discover(m.root)
 		if len(servers) == 0 {
-			m.appendBlock(&block{kind: blockInfo, content: "no MCP servers configured — add .mihani/mcp.json"})
+			m.appendBlock(&block{kind: blockInfo, content: "no MCP servers configured - add .mihani/mcp.json"})
 			return nil
 		}
 		var b strings.Builder
@@ -383,9 +385,9 @@ func (m *Model) command(s string) tea.Cmd {
 		m.appendBlock(&block{kind: blockInfo, content: result})
 
 	case "/mouse":
-		state := "off — native terminal selection, no click menus"
+		state := "off - native terminal selection, no click menus"
 		if m.cfg.MouseEnabled() {
-			state = "on — click a message for actions, drag to select (release copies)"
+			state = "on - click a message for actions, drag to select (release copies)"
 		}
 		m.appendBlock(&block{kind: blockInfo,
 			content: "mouse capture: " + state + "\n" +
@@ -407,7 +409,7 @@ func (m *Model) command(s string) tea.Cmd {
 		return tea.Quit
 
 	default:
-		m.appendBlock(&block{kind: blockError, content: "unknown command: " + fields[0] + " — try /help"})
+		m.appendBlock(&block{kind: blockError, content: "unknown command: " + fields[0] + " - try /help"})
 	}
 	return nil
 }
@@ -415,12 +417,12 @@ func (m *Model) command(s string) tea.Cmd {
 // settingsItems builds the /settings overlay. Provider credentials are
 // deliberately absent: keys are never displayed anywhere in the UI.
 func (m *Model) settingsItems() []overlayItem {
-	auto := "off — dangerous tools ask first"
+	auto := "off - dangerous tools ask first"
 	if m.cfg.AutoConfirm {
-		auto = "on — tools run without asking"
+		auto = "on - tools run without asking"
 	}
 	reset := usage.NextReset(m.cfg.CurrentProvider)
-	resetLabel := "—"
+	resetLabel := "-"
 	if !reset.IsZero() {
 		resetLabel = time.Until(reset).Round(time.Minute).String()
 	}
@@ -429,7 +431,7 @@ func (m *Model) settingsItems() []overlayItem {
 	if builtin {
 		used = fmt.Sprintf("$%.2f · oldest entry clears in %s", m.spend, resetLabel)
 	} else {
-		used = fmt.Sprintf("$%.2f tracked — not capped (your own credentials)", m.spend)
+		used = fmt.Sprintf("$%.2f tracked - not capped (your own credentials)", m.spend)
 	}
 	items := []overlayItem{
 		{label: "Auto confirm", detail: auto + "  (enter toggles)"},
@@ -462,7 +464,7 @@ func (m *Model) openKeyEditor(providerID string) {
 	m.keyEditTarget = providerID
 	m.connectInput.Reset()
 	m.connectInput.SetValue(m.cfg.Providers[providerID].PersonalKey)
-	m.connectInput.Placeholder = "paste your key — submit empty to remove"
+	m.connectInput.Placeholder = "paste your key - submit empty to remove"
 	m.connectInput.SetWidth(minInt(58, maxInt(20, m.width-20)))
 	m.connectInput.Focus()
 }
@@ -492,7 +494,7 @@ func (m *Model) updateKeyEditor(key tea.KeyMsg) tea.Cmd {
 			m.notify("Personal key removed")
 		} else {
 			secrets.Register(value)
-			m.notify("Personal key saved for " + p.Label + " — auto-fallback armed")
+			m.notify("Personal key saved for " + p.Label + " - auto-fallback armed")
 		}
 		m.agent.Cfg = m.cfg
 		m.closeKeyEditor()
@@ -574,7 +576,28 @@ func truncateText(s string, n int) string {
 	if len(r) <= n {
 		return s
 	}
-	return string(r[:n]) + "…"
+	return string(r[:n]) + "..."
+}
+
+// truncateWord shortens s to fit n display cells, backing off to the last
+// space so words are never cut in half; very long words fall back to a hard
+// cut. The ellipsis counts toward the budget.
+func truncateWord(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	cut := n - 3
+	if cut < 1 {
+		cut = n
+	}
+	if i := strings.LastIndex(string(r[:cut]), " "); i > cut/2 {
+		cut = i
+	}
+	if cut >= n {
+		return string(r[:n])
+	}
+	return string(r[:cut]) + "..."
 }
 
 func mod(a, n int) int { return (a%n + n) % n }

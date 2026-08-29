@@ -461,6 +461,15 @@ func TestFocusActionsRevertAndFork(t *testing.T) {
 	send("second question")
 	m.handle(agent.Event{Kind: "text", Text: "second answer"})
 	m.closeActiveAssistant()
+	// startTurn alone does not append to history; simulate the agent's
+	// conversation so the revert history-trim is observable.
+	m.agent.Restore([]map[string]any{
+		{"role": "system", "content": "sys"},
+		{"role": "user", "content": "first question"},
+		{"role": "assistant", "content": "first answer"},
+		{"role": "user", "content": "second question"},
+		{"role": "assistant", "content": "second answer"},
+	})
 
 	// Open focus on the newest message via "]".
 	next, _, handled := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}})
@@ -480,7 +489,8 @@ func TestFocusActionsRevertAndFork(t *testing.T) {
 		t.Fatalf("moveFocus did not reach first prompt: %#v", m.blocks[idx].content)
 	}
 
-	// revert → composer prefill, transcript untouched.
+	// revert → drops this message + later transcript, trims agent history,
+	// and prefills the composer so the user can edit and resend.
 	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	if m.focusActive {
 		t.Fatal("revert should close focus")
@@ -488,27 +498,31 @@ func TestFocusActionsRevertAndFork(t *testing.T) {
 	if !strings.Contains(m.input.Value(), "first question") {
 		t.Fatalf("composer not prefilled: %q", m.input.Value())
 	}
-	if len(m.blocks) != 4 {
-		t.Fatalf("revert must keep transcript, blocks=%d", len(m.blocks))
+	if len(m.blocks) != 0 {
+		t.Fatalf("revert must drop the message and everything after, blocks=%d", len(m.blocks))
+	}
+	for _, msg := range m.agent.History() {
+		if s, isStr := msg["content"].(string); isStr && strings.Contains(s, "first question") {
+			t.Fatal("history still contains the reverted prompt")
+		}
 	}
 
-	// Rebuild state, then fork from the FIRST message: second exchange gone.
+	// Rebuild state, then fork from the only remaining message: its turn is
+	// dropped and the prompt text returns to the composer.
 	m.input.Reset() // focus requires an idle composer
 	m.startTurn("second question")
 	m.cancel()
 	m.finishTurn(resultMsg{})
-	for i := 0; i < 3; i++ { // open on newest, walk back to oldest
-		m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
-	}
+	m.setFocus(0)
 	idxBefore, ok := m.focusedBlockIndex()
-	if !ok || m.blocks[idxBefore].content != "first question" {
-		t.Fatalf("expected focus on oldest prompt, got %#v (ok=%v)", idxBefore, ok)
+	if !ok || m.blocks[idxBefore].content != "second question" {
+		t.Fatalf("expected focus on the rebuilt prompt, got %#v (ok=%v)", idxBefore, ok)
 	}
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m.forkFromMessage()
 	if len(m.blocks) != 0 {
 		t.Fatalf("fork should drop everything after (and incl.) the prompt, got %d", len(m.blocks))
 	}
-	if !strings.Contains(m.input.Value(), "first question") {
+	if !strings.Contains(m.input.Value(), "second question") {
 		t.Fatalf("fork should preload the prompt text: %q", m.input.Value())
 	}
 	hist := m.agent.History()
@@ -1278,5 +1292,78 @@ func TestClickNearUserMessageOpensMenu(t *testing.T) {
 	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 4, Y: 2})
 	if m.overlay != "Message" {
 		t.Fatalf("click near a user message should open the menu, overlay=%q", m.overlay)
+	}
+}
+
+// Spurious ±1 cell motion (a Windows Terminal artifact on plain clicks) must
+// NOT be mistaken for a drag; the release should still open the message menu.
+func TestClickJitterDeadZone(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.appendBlock(&block{kind: blockUser, content: "click me"})
+	m.appendBlock(&block{kind: blockAssistant, content: "reply", finalized: true})
+	m.refreshView()
+
+	// Press at (5,2), one spurious +1 jitter motion, release back at the cell.
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 5, Y: 2})
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 6, Y: 2})
+	if m.selDrag {
+		t.Fatal("1-cell jitter must not arm a drag")
+	}
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 5, Y: 2})
+	if m.overlay != "Message" {
+		t.Fatalf("jittered click should still open the menu, overlay=%q", m.overlay)
+	}
+}
+
+// A real drag (>=2 cells) is still a selection, not a menu click.
+func TestDragBeyondDeadZoneSelects(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.appendBlock(&block{kind: blockAssistant, content: "the answer text", finalized: true})
+	m.refreshView()
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 0, Y: 1})
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 17, Y: 1})
+	if !m.selDrag {
+		t.Fatal("a 17-cell move must arm a drag")
+	}
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 17, Y: 1})
+	if m.overlay != "" {
+		t.Fatalf("a real drag must not open the menu, overlay=%q", m.overlay)
+	}
+}
+
+// The message menu must open even while a turn is in flight; only the
+// destructive revert/fork actions are deferred until the turn finishes.
+func TestMenuOpensWhileBusy(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.appendBlock(&block{kind: blockUser, content: "first"})
+	m.appendBlock(&block{kind: blockAssistant, content: "reply", finalized: true})
+	m.refreshView()
+	m.busy = true
+
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 5, Y: 2})
+	_, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 5, Y: 2})
+	if m.overlay != "Message" {
+		t.Fatalf("menu should open while busy, overlay=%q", m.overlay)
+	}
+	// Selecting revert while busy is rejected, transcript untouched.
+	m.selectOverlayItem()
+	if len(m.blocks) != 2 {
+		t.Fatalf("revert while busy must not drop blocks, blocks=%d", len(m.blocks))
+	}
+	if !strings.Contains(m.toast, "wait for the current turn") {
+		t.Fatalf("expected a busy guard toast, got %q", m.toast)
+	}
+}
+
+// truncateWord backs off to a word boundary instead of cutting mid-word.
+func TestTruncateWordStopsAtWordBoundary(t *testing.T) {
+	got := truncateWord("load this message into the composer to edit and resend", 20)
+	if strings.Contains(got, "...") == false {
+		t.Fatalf("expected truncation, got %q", got)
+	}
+	// No word may be split: the cut must land right after a space.
+	body := strings.TrimSuffix(got, "...")
+	if body == "" || body[len(body)-1] != ' ' && !strings.Contains(got, " ") {
+		t.Fatalf("unexpected truncated form %q", got)
 	}
 }

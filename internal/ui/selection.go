@@ -34,6 +34,22 @@ func mouseDebugLog(x tea.MouseMsg, m *Model) {
 		time.Now().Format("15:04:05.000"), x.Button, x.Action, x.X, x.Y, m.view.YOffset, len(m.renderedLines), m.selOn, m.overlay, m.busy)
 }
 
+// mouseDebugProbe writes a startup line to the same log so a missing log
+// file means the env var never reached the process, while an empty log means
+// mouse events never reached Update.
+func mouseDebugProbe(version string, mouseEnabled bool, useMouseSet bool) {
+	if os.Getenv("MIHANI_DEBUG") == "" {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(os.TempDir(), "mihani-mouse.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s PROBE version=%s mouse_enabled=%v use_mouse_set=%v wt_session=%q term=%q term_program=%q\n",
+		time.Now().Format("15:04:05.000"), version, mouseEnabled, useMouseSet, os.Getenv("WT_SESSION"), os.Getenv("TERM"), os.Getenv("TERM_PROGRAM"))
+}
+
 var selHighlight = lipgloss.NewStyle().Background(lipgloss.Color("#414a70"))
 
 // contentRowOf maps a mouse screen row to a transcript content row.
@@ -70,9 +86,23 @@ func (m *Model) mouseMove(x tea.MouseMsg) {
 	if r >= len(m.renderedLines) {
 		r = len(m.renderedLines) - 1
 	}
-	m.selH = selPos{row: r, col: x.X}
-	if m.selH != m.selA {
-		m.selDrag = true
+	p := selPos{row: r, col: x.X}
+	m.selH = p
+	// Jitter dead zone: terminals (notably Windows Terminal) deliver spurious
+	// ±1 cell motion events on plain clicks, which used to turn a click into
+	// a drag and silently swallow the menu. Only genuine movement counts.
+	if !m.selDrag {
+		dx := p.col - m.selA.col
+		if dx < 0 {
+			dx = -dx
+		}
+		dy := p.row - m.selA.row
+		if dy < 0 {
+			dy = -dy
+		}
+		if dx >= 2 || dy >= 2 {
+			m.selDrag = true
+		}
 	}
 }
 
@@ -84,11 +114,8 @@ func (m *Model) mouseRelease(x tea.MouseMsg) {
 	a, h := m.selA, m.selH
 	m.clearSelection()
 	if !wasDrag {
-		// No movement: treat as a click.
-		if m.busy {
-			m.notify("wait for the current turn to finish")
-			return
-		}
+		// No movement: treat as a click. The menu opens even mid-turn; the
+		// destructive actions (revert/fork) guard themselves on m.busy.
 		if b := m.nearUserMessage(x.Y); b >= 0 {
 			m.openMessageMenu(b)
 		}

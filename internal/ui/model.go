@@ -509,6 +509,7 @@ func shortID(id string) string {
 // terminal's native selection is disabled while mouse capture is active.
 // Set config use_mouse=false to restore native drag-select (click menus off).
 func Run(cfg config.Config, version, resumeID, initialPrompt string) error {
+	mouseDebugProbe(version, cfg.MouseEnabled(), cfg.UseMouse != nil)
 	m, err := New(cfg, version, resumeID, initialPrompt)
 	if err != nil {
 		return err
@@ -1020,13 +1021,16 @@ func (m *Model) applyMessageAction(blockIdx, action int) {
 	}
 	text := m.blocks[blockIdx].content
 	switch action {
-	case 0: // revert: prefill composer to edit + resend
-		m.input.Reset()
-		m.input.SetValue(text)
-		m.resizeComposer()
-		m.notify("Loaded into composer - edit and press enter to resend")
-	case 1: // fork: rewind transcript + history, prefill composer
-		m.doFork(blockIdx)
+	case 0, 1: // revert/fork mutate history: not safe mid-turn
+		if m.busy {
+			m.notify("wait for the current turn to finish")
+			return
+		}
+		if action == 0 {
+			m.doRevert(blockIdx)
+		} else {
+			m.doFork(blockIdx)
+		}
 	case 2: // copy
 		if err := clipboard.WriteAll(text); err != nil {
 			m.notify("Clipboard unavailable: " + err.Error())
@@ -1045,6 +1049,51 @@ func (m *Model) revertToComposer() {
 		return
 	}
 	m.applyMessageAction(idx, 0)
+}
+
+// doRevert deletes the message (and everything after it: the response,
+// later turns) from the transcript and from the agent's conversation
+// history, then preloads the message text into the composer so the user
+// can edit and resend it as a fresh first message.
+func (m *Model) doRevert(idx int) {
+	text := m.blocks[idx].content
+
+	ordinal := 0 // which user message (1-based) this block represents
+	for i := 0; i <= idx && i < len(m.blocks); i++ {
+		if m.blocks[i].kind == blockUser {
+			ordinal++
+		}
+	}
+	seen := 0
+	cut := len(m.agent.History())
+	for h, msg := range m.agent.History() {
+		if fmt.Sprint(msg["role"]) != "user" {
+			continue
+		}
+		if _, isText := msg["content"].(string); !isText {
+			continue // tool_result batches are not real prompts
+		}
+		seen++
+		if seen == ordinal {
+			cut = h
+			break
+		}
+	}
+	if cut <= len(m.agent.History()) {
+		m.agent.Restore(m.agent.History()[:cut])
+	}
+
+	m.blocks = append([]*block{}, m.blocks[:idx]...)
+	m.activeAssistant, m.activeTool, m.activeThinking = -1, -1, -1
+	m.activeRaw.Reset()
+	m.stickBottom = true
+
+	m.input.Reset()
+	m.input.SetValue(text)
+	m.resizeComposer()
+	m.saveSession()
+	m.relayout()
+	m.notify("Reverted - message removed, edit and press enter to resend")
 }
 
 // forkFromMessage rewinds the conversation to just before the focused prompt:
