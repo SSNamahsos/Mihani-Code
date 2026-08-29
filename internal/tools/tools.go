@@ -20,10 +20,10 @@ type Tool struct {
 }
 
 var Registry = []Tool{
-	{Name: "read_file", Description: "Read a text file; large files can be paged with offset/limit (1-based lines)", Schema: objectSchema(map[string]any{
+	{Name: "read_file", Description: "Read a text file one page at a time. Pass offset (1-based start line) and limit (max lines, default 400) to read any range; every result reports the file's total line count so you can read the whole file by paging (e.g. offset 1..”N/2“ repeatedly), and a half by starting at total/2. Read large files as several windows instead of relying on a single read.", Schema: objectSchema(map[string]any{
 		"path":   stringProperty("Path to the file"),
 		"offset": map[string]any{"type": "integer", "description": "1-based line number to start reading from (optional)"},
-		"limit":  map[string]any{"type": "integer", "description": "Maximum number of lines to read (optional)"},
+		"limit":  map[string]any{"type": "integer", "description": "Maximum number of lines to read (optional, default 400)"},
 	}, "path")},
 	{Name: "list_dir", Description: "List files in a directory", Schema: objectSchema(map[string]any{"path": stringProperty("Directory path")}, "")},
 	{Name: "search_files", Description: "Search text in project files", Schema: objectSchema(map[string]any{"pattern": stringProperty("Text to search"), "path": stringProperty("Directory path")}, "pattern")},
@@ -80,32 +80,36 @@ func (r Runner) Run(ctx context.Context, name string, in map[string]any) string 
 		if e != nil {
 			return "ERROR: " + e.Error()
 		}
-		content := string(b)
+		lines := strings.Split(strings.TrimRight(normalizeNewlines(string(b)), "\n"), "\n")
+		total := len(lines)
+
 		offset := intInput(in, "offset")
 		limit := intInput(in, "limit")
-		if offset > 0 || limit > 0 {
-			lines := strings.Split(strings.TrimRight(normalizeNewlines(content), "\n"), "\n")
-			start := offset
-			if start < 1 {
-				start = 1
-			}
-			if start > len(lines) {
-				return fmt.Sprintf("(file has %d lines; offset %d is past the end)", len(lines), offset)
-			}
-			end := len(lines)
-			if limit > 0 && start-1+limit < end {
-				end = start - 1 + limit
-			}
-			return strings.Join(lines[start-1:end], "\n") + fmt.Sprintf("\n[lines %d-%d of %d]", start, end, len(lines))
+		if limit <= 0 {
+			limit = 400
 		}
-		const maxReadChars = 40_000
-		if len(content) > maxReadChars {
-			lines := strings.Count(normalizeNewlines(content[:maxReadChars]), "\n")
-			return content[:maxReadChars] +
-				fmt.Sprintf("\n...(truncated at %d chars) — re-read with {\"offset\": %d, \"limit\": 400} to continue from line %d",
-					maxReadChars, lines+1, lines+1)
+		if offset <= 0 {
+			offset = 1
 		}
-		return content
+		if total == 1 && lines[0] == "" {
+			total = 0
+		}
+		if offset > total {
+			return fmt.Sprintf("(file has %d lines; offset %d is past the end)", total, offset)
+		}
+		end := offset - 1 + limit
+		if end > total {
+			end = total
+		}
+		page := strings.Join(lines[offset-1:end], "\n")
+		footer := fmt.Sprintf("\n[lines %d-%d of %d]", offset, end, total)
+		if end < total {
+			footer += fmt.Sprintf(" — next page: {\"offset\": %d, \"limit\": %d}", end+1, limit)
+		}
+		if offset == 1 && end < total {
+			footer += fmt.Sprintf(" (half point: offset %d)", total/2)
+		}
+		return page + footer
 	case "list_dir":
 		p := fmt.Sprint(in["path"])
 		if p == "<nil>" || p == "" {

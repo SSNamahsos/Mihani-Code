@@ -506,8 +506,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay != "" || m.connectOpen || m.keyEditOpen || m.pendingApproval != nil {
 			break
 		}
+		if x.Action == tea.MouseActionPress && x.Button == tea.MouseButtonWheelUp {
+			m.scrollUp(3)
+			return m, nil
+		}
+		if x.Action == tea.MouseActionPress && x.Button == tea.MouseButtonWheelDown {
+			m.scrollDown(3)
+			return m, nil
+		}
 		if x.Action == tea.MouseActionPress && x.Button == tea.MouseButtonLeft {
-			if b := m.blockAtScreenY(x.Y); b >= 0 && b < len(m.blocks) && m.blocks[b].kind == blockUser {
+			if b := m.nearUserMessage(x.Y); b >= 0 {
 				m.openMessageMenu(b)
 				return m, nil
 			}
@@ -1340,6 +1348,28 @@ func (m *Model) blockAtScreenY(y int) int {
 			return i
 		}
 		cum += lines
+	}
+	return -1
+}
+
+// nearUserMessage returns the transcript index of the user message nearest the
+// clicked row — exact hit first, then a small block tolerance so a click just
+// above or below a message box still opens its action menu.
+func (m *Model) nearUserMessage(y int) int {
+	idx := m.blockAtScreenY(y)
+	if idx < 0 || idx >= len(m.blocks) {
+		return -1
+	}
+	if m.blocks[idx].kind == blockUser {
+		return idx
+	}
+	// The click landed on a tool card or reply: scan outward a couple of
+	// blocks for the closest user message.
+	for _, delta := range []int{-1, 1, -2, 2} {
+		i := idx + delta
+		if i >= 0 && i < len(m.blocks) && m.blocks[i].kind == blockUser {
+			return i
+		}
 	}
 	return -1
 }

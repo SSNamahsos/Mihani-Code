@@ -29,6 +29,10 @@ Rules:
 - Every call receives a reply in the form:
   <tool_result name="..." status="ok|error">output</tool_result>
 - Never invent results. Never fabricate a tool_result yourself.
+- read_file returns one window at a time plus the file's total line count.
+  To read a LARGE file entirely, call it repeatedly with increasing offset
+  until you pass the reported total. To read only half, start at
+  offset = total/2. Never fall back to bash just to view a file.
 - When the task is complete (or no tool is needed), answer in plain prose and
   include NO tool_call block.`
 

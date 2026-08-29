@@ -121,14 +121,26 @@ func TestReadFileOffsetLimitPaging(t *testing.T) {
 		t.Fatalf("expected past-end notice: %q", got)
 	}
 
-	// Whole-file reads announce how to resume after truncation.
-	huge := strings.Repeat("x", 45_000)
-	if err := os.WriteFile(filepath.Join(root, "huge.txt"), []byte(huge), 0644); err != nil {
+	// Whole-file reads are line-paged and report the total so the model can
+	// read everything (half = total/2) or any range.
+	var many strings.Builder
+	for i := 1; i <= 1000; i++ {
+		fmt.Fprintf(&many, "row-%d\n", i)
+	}
+	if err := os.WriteFile(filepath.Join(root, "rows.txt"), []byte(many.String()), 0644); err != nil {
 		t.Fatal(err)
 	}
-	got = r.Run(context.Background(), "read_file", map[string]any{"path": "huge.txt"})
-	if !strings.Contains(got, `"offset"`) || !strings.Contains(got, "(truncated") {
-		t.Fatalf("truncation should teach pagination: %q", tailOf(got, 160))
+	got = r.Run(context.Background(), "read_file", map[string]any{"path": "rows.txt"})
+	if !strings.Contains(got, "of 1000") || !strings.Contains(got, "half point: offset 500") {
+		t.Fatalf("read should reveal total lines and half point: %q", tailOf(got, 200))
+	}
+	if !strings.Contains(got, "[lines 1-400 of 1000]") {
+		t.Fatalf("expected a bounded first page: %q", tailOf(got, 200))
+	}
+	// Half-file read: offset near total/2.
+	got = r.Run(context.Background(), "read_file", map[string]any{"path": "rows.txt", "offset": 500, "limit": 100})
+	if !strings.Contains(got, "row-500") || !strings.Contains(got, "of 1000") {
+		t.Fatalf("half-window read wrong: %q", tailOf(got, 200))
 	}
 }
 
