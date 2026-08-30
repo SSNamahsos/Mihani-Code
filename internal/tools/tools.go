@@ -4,13 +4,19 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	xhtml "golang.org/x/net/html"
 )
 
 type Tool struct {
@@ -40,7 +46,10 @@ var Registry = []Tool{
 			"status":  map[string]any{"type": "string", "enum": []any{"pending", "in_progress", "done"}, "description": "pending | in_progress | done"},
 		}, "required": []any{"content"}}, "description": "The complete todo list, in order."},
 	}, "todos")},
-	{Name: "bash", Description: "Run a shell command in the workspace", Dangerous: true, Schema: objectSchema(map[string]any{"command": stringProperty("Command to execute")}, "command")},
+	{Name: "bash", Description: "Run a shell command in the workspace. On Windows the command executes with cmd.exe (batch syntax: &&, for %var in (...) do, dir); on Unix it runs in sh/bash. Commands time out after 60 seconds by default; pass timeout (seconds, max 300) for long-running work like downloads or builds.", Dangerous: true, Schema: objectSchema(map[string]any{"command": stringProperty("Command to execute"), "timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (optional, default 60, max 300)"}}, "command")},
+	{Name: "web_search", Description: "Search the web and get top results (title, url, snippet). Use it to find sources, article pages, image URLs, or current information, then open a specific result with web_fetch.", Schema: objectSchema(map[string]any{"query": stringProperty("Search query")}, "query")},
+	{Name: "web_fetch", Description: "Fetch a URL and return its content as text (HTML is stripped to readable text, capped at 40KB). Pass save_to (a workspace-relative path) to download the raw bytes to a file instead — use that for images, e.g. save_to \"img/coffee.jpg\" from a direct image URL.", Schema: objectSchema(map[string]any{"url": stringProperty("URL to fetch (http/https)"), "save_to": map[string]any{"type": "string", "description": "Optional workspace-relative path to save the raw response to (e.g. an image)"}}, "url")},
+	{Name: "glob", Description: "Find files by glob pattern relative to the workspace, e.g. \"**/*.go\", \"src/**/*.ts\", \"*.png\". Returns matching relative paths (directories listed too, suffixed /).", Schema: objectSchema(map[string]any{"pattern": stringProperty("Glob pattern, e.g. **/*.go"), "path": stringProperty("Subdirectory to search in (optional, default workspace root)")}, "pattern")},
 }
 
 func stringProperty(description string) map[string]any {
@@ -249,7 +258,14 @@ func (r Runner) Run(ctx context.Context, name string, in map[string]any) string 
 		}
 		return "OK: " + FormatTodoList(list)
 	case "bash":
-		commandCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		timeoutSec := 60
+		if t := intInput(in, "timeout"); t > 0 {
+			if t > 300 {
+				t = 300
+			}
+			timeoutSec = t
+		}
+		commandCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 		defer cancel()
 		var cmd *exec.Cmd
 		if runtime.GOOS == "windows" {
@@ -264,12 +280,18 @@ func (r Runner) Run(ctx context.Context, name string, in map[string]any) string 
 		cmd.Dir = r.Root
 		b, e := cmd.CombinedOutput()
 		if commandCtx.Err() == context.DeadlineExceeded {
-			return "ERROR: command timed out after 60s\n" + limit(string(b), 10000)
+			return fmt.Sprintf("ERROR: command timed out after %ds\n%s", timeoutSec, limit(string(b), 10000))
 		}
 		if e != nil {
 			return fmt.Sprintf("%s\n(exit: %v)", limit(string(b), 10000), e)
 		}
 		return limit(string(b), 10000)
+	case "glob":
+		return runGlob(r.Root, in)
+	case "web_search":
+		return runWebSearch(ctx, in)
+	case "web_fetch":
+		return runWebFetch(ctx, r, in)
 	default:
 		return "ERROR: unknown tool " + name
 	}
@@ -527,6 +549,256 @@ func appendDiffLines(b *strings.Builder, sign string, lines []string) {
 		shown++
 	}
 }
+// runGlob lists files matching a glob pattern (with ** support) relative to
+// the workspace root, skipping vendored/noise directories. Directories are
+// listed too (suffixed "/") so the model can drill down.
+func globMatch(pattern, path string) bool {
+	return globMatchSegs(strings.Split(filepath.ToSlash(pattern), "/"), strings.Split(filepath.ToSlash(path), "/"))
+}
+
+func globMatchSegs(p, s []string) bool {
+	if len(p) == 0 {
+		return len(s) == 0
+	}
+	if p[0] == "**" {
+		if globMatchSegs(p[1:], s) {
+			return true
+		}
+		if len(s) > 0 {
+			return globMatchSegs(p, s[1:])
+		}
+		return false
+	}
+	if len(s) == 0 {
+		return false
+	}
+	if !segMatch(p[0], s[0]) {
+		return false
+	}
+	return globMatchSegs(p[1:], s[1:])
+}
+
+func segMatch(pat, seg string) bool {
+	if !strings.ContainsAny(pat, "*?") {
+		return pat == seg
+	}
+	var re strings.Builder
+	re.WriteString("^")
+	for _, r := range pat {
+		switch r {
+		case '*':
+			re.WriteString(".*")
+		case '?':
+			re.WriteString(".")
+		default:
+			re.WriteString(regexp.QuoteMeta(string(r)))
+		}
+	}
+	re.WriteString("$")
+	ok, _ := regexp.MatchString(re.String(), seg)
+	return ok
+}
+
+func runGlob(root string, in map[string]any) string {
+	pat := fmt.Sprint(in["pattern"])
+	if pat == "" || pat == "<nil>" {
+		return "ERROR: missing glob pattern"
+	}
+	base := "."
+	if v := fmt.Sprint(in["path"]); v != "" && v != "<nil>" {
+		base = v
+	}
+	abs, err := filepath.Abs(filepath.Join(root, base))
+	if err != nil {
+		return "ERROR: " + err.Error()
+	}
+	if rel, err := filepath.Rel(root, abs); err == nil && (rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+		return "ERROR: path is outside workspace"
+	}
+	var out []string
+	filepath.Walk(abs, func(p string, i os.FileInfo, werr error) error {
+		if werr != nil || i == nil {
+			return nil
+		}
+		rel, err := filepath.Rel(abs, p)
+		if err != nil || rel == "." {
+			return nil
+		}
+		if i.IsDir() {
+			if skipDirs[i.Name()] {
+				return filepath.SkipDir
+			}
+			if globMatch(pat, rel) {
+				out = append(out, rel+string(filepath.Separator))
+			}
+			return nil
+		}
+		if len(out) >= 500 {
+			return filepath.SkipAll
+		}
+		if globMatch(pat, rel) {
+			out = append(out, rel)
+		}
+		return nil
+	})
+	if len(out) == 0 {
+		return "No files match " + pat
+	}
+	return limit(strings.Join(out, "\n"), 8000)
+}
+
+// webSearch results: DuckDuckGo's HTML endpoint (no API key needed).
+var (
+	ddgTitleRe   = regexp.MustCompile(`<a[^>]+class="[^"]*result__a[^"]*"[^>]*href="([^"]*)"[^>]*>(.*?)</a>`)
+	ddgSnippetRe = regexp.MustCompile(`<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>`)
+)
+
+func runWebSearch(ctx context.Context, in map[string]any) string {
+	q := strings.TrimSpace(fmt.Sprint(in["query"]))
+	if q == "" || q == "<nil>" {
+		return "ERROR: missing search query"
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	url := "https://html.duckduckgo.com/html/?q=" + url.QueryEscape(q)
+	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return "ERROR: " + err.Error()
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "ERROR: web search failed: " + err.Error()
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Sprintf("ERROR: search endpoint returned %s", resp.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "ERROR: " + err.Error()
+	}
+	html := string(body)
+	titles := ddgTitleRe.FindAllStringSubmatch(html, -1)
+	snippets := ddgSnippetRe.FindAllStringSubmatch(html, -1)
+	if len(titles) == 0 {
+		return "No results for: " + q
+	}
+	var b strings.Builder
+	for i, t := range titles {
+		if i >= 8 {
+			break
+		}
+		link := resolveDDGLink(t[1])
+		fmt.Fprintf(&b, "%d. %s\n   %s", i+1, htmlToText(t[2]), link)
+		if i < len(snippets) {
+			fmt.Fprintf(&b, "\n   %s", strings.TrimSpace(htmlToText(snippets[i][1])))
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// resolveDDGLink unwraps DuckDuckGo redirect URLs (/l/?uddg=<url>) to the
+// real target so the model gets fetchable links.
+func resolveDDGLink(href string) string {
+	if u, err := url.Parse(href); err == nil {
+		if u.Path == "/l/" || strings.HasPrefix(u.Path, "/l/") {
+			if real := u.Query().Get("uddg"); real != "" {
+				return real
+			}
+		}
+		if href != "" && !strings.HasPrefix(href, "http") {
+			return "https://duckduckgo.com" + href
+		}
+	}
+	return href
+}
+
+func runWebFetch(ctx context.Context, r Runner, in map[string]any) string {
+	raw := strings.TrimSpace(fmt.Sprint(in["url"]))
+	if raw == "" || raw == "<nil>" {
+		return "ERROR: missing url"
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "ERROR: url must be an absolute http(s) URL: " + raw
+	}
+	fetchCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return "ERROR: " + err.Error()
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "ERROR: fetch failed: " + err.Error()
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Sprintf("ERROR: server returned %s for %s", resp.Status, u.String())
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
+	if err != nil {
+		return "ERROR: " + err.Error()
+	}
+	if dest := fmt.Sprint(in["save_to"]); dest != "" && dest != "<nil>" {
+		p, err := r.path(dest)
+		if err != nil {
+			return "ERROR: " + err.Error()
+		}
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			return "ERROR: " + err.Error()
+		}
+		if err := os.WriteFile(p, body, 0644); err != nil {
+			return "ERROR: " + err.Error()
+		}
+		return fmt.Sprintf("OK: saved %d bytes to %s (HTTP %s)", len(body), p, resp.Status)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if strings.Contains(ct, "html") {
+		text := htmlToText(string(body))
+		return limit(text, 40000)
+	}
+	if isBinary(body) {
+		return fmt.Sprintf("Binary content (%s, %d bytes) — use save_to to download it to a file", ct, len(body))
+	}
+	return limit(string(body), 40000)
+}
+
+// htmlToText strips scripts/styles/tags and decodes common entities so web
+// content is cheap for the model to read. Order matters: kill script/style
+// blocks first, their markup would otherwise leak into the text.
+func htmlToText(html string) string {
+	for _, kill := range []string{"script", "style", "noscript"} {
+		re := regexp.MustCompile("(?is)<" + kill + `[^>]*>.*?</` + kill + `>`)
+		html = re.ReplaceAllString(html, " ")
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(html, "\n") {
+		l := strings.TrimSpace(line)
+		if strings.HasPrefix(l, "<!") {
+			continue
+		}
+		l = tagRe.ReplaceAllString(l, " ")
+		l = htmlUnescape.ReplaceAllStringFunc(l, func(s string) string {
+			return xhtml.UnescapeString(s)
+		})
+		l = strings.Join(strings.Fields(l), " ")
+		if l != "" {
+			b.WriteString(l)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+var (
+	tagRe        = regexp.MustCompile(`<[^>]+>`)
+	htmlUnescape = regexp.MustCompile(`&(amp|lt|gt|quot|#39|nbsp|mdash|ndash);`)
+)
+
 func snapshot(root, path string) error {
 	info, err := os.Stat(path)
 	if err != nil {

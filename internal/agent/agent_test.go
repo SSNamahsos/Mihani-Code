@@ -183,6 +183,33 @@ func TestOpenAIRequestRejectsHTMLResponse(t *testing.T) {
 	}
 }
 
+// A stream that ends mid tool-call (partial JSON arguments, no [DONE]) must
+// fail with a retriable error instead of running the tool on garbage input.
+func TestOpenAIRequestTruncatedToolCallFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// tool call arguments cut off mid-JSON; stream just stops.
+		// arguments are deliberately truncated mid-JSON and the stream
+		// stops without [DONE]
+		truncatedArgs := `{"command":"curl -s`
+		chunk, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"delta": map[string]any{"tool_calls": []map[string]any{{"index": 0, "id": "call_1", "function": map[string]any{"name": "bash", "arguments": truncatedArgs}}}}}}})
+		fmt.Fprintf(w, "data: %s\n\n", chunk)
+	}))
+	defer server.Close()
+	cfg := config.Config{CurrentProvider: "t", CurrentModel: "m", Providers: map[string]config.Provider{"t": {Type: "openai", BaseURL: server.URL}}}
+	a := Agent{Cfg: cfg, Root: t.TempDir(), Client: server.Client()}
+	_, calls, _, _, _, err := a.openAIRequest(context.Background(), cfg.Providers["t"], true, func(Event) {})
+	if err == nil {
+		t.Fatalf("truncated stream must fail, got calls=%d", len(calls))
+	}
+	if len(calls) != 0 {
+		t.Fatalf("no tool call may be returned from a truncated stream, got %d", len(calls))
+	}
+	if !Retriable(err) {
+		t.Fatalf("truncated-stream error must be retriable for the reconnect loop, got %v", err)
+	}
+}
+
 // Regression: streamed parallel tool calls must be reassembled in index order.
 func TestOpenAIToolCallsPreserveStreamOrder(t *testing.T) {
 	var requests int

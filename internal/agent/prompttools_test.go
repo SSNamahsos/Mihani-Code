@@ -44,6 +44,26 @@ func TestExtractToolCallsNone(t *testing.T) {
 	}
 }
 
+// Regression: a stream that cut off inside a tool_call block (opening tag
+// present, closing tag missing) must be reported as a parse error so the
+// turn gets a corrective hint — never a silent early end.
+func TestExtractToolCallsTruncatedBlockReported(t *testing.T) {
+	truncated := "Running it now.\n" + toolCallOpenTag + `{"name":"bash","arguments":{"command":"curl -s https://example.com?x=`
+	calls, err := extractToolCalls(truncated)
+	if err == nil {
+		t.Fatal("truncated tool_call block must be reported as a parse error")
+	}
+	if len(calls) != 0 {
+		t.Fatalf("no complete call may be extracted from a truncated block, got %d", len(calls))
+	}
+	// Complete blocks still parse normally.
+	ok := tagged("bash", map[string]any{"command": "dir"})
+	calls, err = extractToolCalls("done.\n" + ok)
+	if err != nil || len(calls) != 1 {
+		t.Fatalf("complete block must still parse, got %d calls (%v)", len(calls), err)
+	}
+}
+
 func TestExtractToolCallsMalformedReportsError(t *testing.T) {
 	if _, err := extractToolCalls("<tool_call>{not json}</tool_call>"); err == nil {
 		t.Fatal("malformed call must surface an error so the model can retry")

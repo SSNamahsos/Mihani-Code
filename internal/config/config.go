@@ -53,6 +53,11 @@ func (p Provider) UseNativeTools() bool {
 // DefaultDailyBudgetUSD is enforced per provider over a rolling 24 hours.
 const DefaultDailyBudgetUSD = 10.0
 
+// defaultMaxTokens is the per-response output budget. Large enough that a
+// single write_file of a whole stylesheet/HTML page is not cut off mid
+// tool-call (8192 caused truncated tool calls on long writes).
+const defaultMaxTokens = 16384
+
 type Config struct {
 	Version         int                      `json:"version"`
 	CurrentProvider string                   `json:"current_provider"`
@@ -93,7 +98,7 @@ func defaults() Config {
 		Version:         2,
 		CurrentProvider: BuiltinPrimary,
 		CurrentModel:    "glm-5.3",
-		MaxTokens:       8192,
+		MaxTokens:       defaultMaxTokens,
 		ContextWindow:   200_000,
 		BudgetUSD:       DefaultDailyBudgetUSD,
 		Permissions:     map[string]string{"read": "allow", "write": "ask", "shell": "ask", "network": "ask"},
@@ -111,9 +116,11 @@ func defaults() Config {
 				BaseURL: "https://seekai.cc/v1",
 				APIKey:  secrets.Secondary(),
 				Models:  []string{"claude-opus-5", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5", "gpt-5.6-sol", "grok-4-5"},
-				// This gateway strips the tools parameter, so Mihani drives
-				// file/shell tools through the text protocol instead.
-				NativeTools: boolPtr(false),
+				// Native function calling verified against this gateway
+				// (2026-08-30 probe: streamed tool_calls with finish=tool_calls).
+				// The text-based tool protocol is unreliable with opus models —
+				// they sometimes refuse to emit tool_call blocks and answer in
+				// prose ("I can't write files here"), so real tools are sent.
 			},
 		},
 	}
@@ -138,7 +145,12 @@ func Load() (Config, error) {
 	}
 	migrateBuiltins(&c)
 	if c.MaxTokens == 0 {
-		c.MaxTokens = 8192
+		c.MaxTokens = defaultMaxTokens
+	}
+	// 8192 was the shipped default; upgrade configs that never changed it so
+	// long file writes stop getting truncated mid tool-call.
+	if c.MaxTokens == 8192 {
+		c.MaxTokens = defaultMaxTokens
 	}
 	if c.ContextWindow <= 0 {
 		c.ContextWindow = 200_000
@@ -158,6 +170,15 @@ func migrateBuiltins(c *Config) {
 	for name, p := range c.Providers {
 		if p.PersonalKey != "" {
 			personal[name] = p.PersonalKey
+		}
+	}
+	// seekai now supports native function calling; older releases stored
+	// native_tools:false for it, which made opus models answer in prose
+	// instead of using tools. Upgrade those stored providers.
+	for name, p := range c.Providers {
+		if strings.Contains(strings.ToLower(p.BaseURL), "seekai") && p.NativeTools != nil && !*p.NativeTools {
+			p.NativeTools = nil
+			c.Providers[name] = p
 		}
 	}
 	for name, builtin := range defaults().Providers {
@@ -202,9 +223,11 @@ func boolPtr(v bool) *bool { return &v }
 // NativeToolsDefault decides whether a newly connected endpoint should use
 // native function calling. Gateways known to strip the tools parameter (so
 // files become unreadable) are steered to the prompt-based protocol.
+// seekai was on this list historically but its gateway now translates
+// OpenAI tools to Anthropic tool_use natively (verified 2026-08-30).
 func NativeToolsDefault(baseURL string) *bool {
 	host := strings.ToLower(baseURL)
-	for _, known := range []string{"seekai", "hcnsec"} {
+	for _, known := range []string{"hcnsec"} {
 		if strings.Contains(host, known) {
 			return boolPtr(false)
 		}

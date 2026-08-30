@@ -44,47 +44,69 @@ func RunPrint(cfg config.Config, prompt string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	err = a.Send(ctx, prompt, "build",
-		func(name string, _ map[string]any) bool {
-			if cfg.AutoConfirm || cfg.Permissions["shell"] == "allow" && name == "bash" {
-				return true
+	// Same automatic reconnect as the TUI: retriable provider failures
+	// (network drop, 5xx/429/408, empty dropped responses) are retried
+	// with growing backoff so headless runs don't die on one flaky stream.
+	var lastErr error
+	for attempt := 1; attempt <= maxTurnAttempts; attempt++ {
+		if attempt > 1 {
+			delay := turnBackoffs[minInt(attempt-2, len(turnBackoffs)-1)]
+			fmt.Fprintf(os.Stderr, "· reconnecting %d/%d · retry in %ds\n", attempt, maxTurnAttempts, int(delay.Seconds()))
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return ctx.Err()
 			}
-			return !tools.Lookup(name).Dangerous
-		},
-		func(ev agent.Event) {
-			switch ev.Kind {
-			case "text":
-				fmt.Print(ev.Text)
-			case "tool_start":
-				detail := summarizeInput(ev.Tool, ev.Input)
-				if detail != "" {
-					fmt.Fprintf(os.Stderr, "· %s %s\n", ev.Tool, detail)
-				} else {
-					fmt.Fprintf(os.Stderr, "· %s\n", ev.Tool)
+			a.TrimHistory(0)
+		}
+		lastErr = a.Send(ctx, prompt, "build",
+			func(name string, _ map[string]any) bool {
+				if cfg.AutoConfirm || cfg.Permissions["shell"] == "allow" && name == "bash" {
+					return true
 				}
-			case "tool_done":
-				if strings.HasPrefix(ev.ToolResult, "ERROR") {
-					fmt.Fprintf(os.Stderr, "✗ %s\n", firstLine(ev.ToolResult))
+				return !tools.Lookup(name).Dangerous
+			},
+			func(ev agent.Event) {
+				switch ev.Kind {
+				case "text":
+					fmt.Print(ev.Text)
+				case "tool_start":
+					detail := summarizeInput(ev.Tool, ev.Input)
+					if detail != "" {
+						fmt.Fprintf(os.Stderr, "· %s %s\n", ev.Tool, detail)
+					} else {
+						fmt.Fprintf(os.Stderr, "· %s\n", ev.Tool)
+					}
+				case "tool_done":
+					if strings.HasPrefix(ev.ToolResult, "ERROR") {
+						fmt.Fprintf(os.Stderr, "✗ %s\n", firstLine(ev.ToolResult))
+					}
+				case "usage":
+					if ev.CostUSD > 0 {
+						usage.Add(usage.Entry{
+							Time:     time.Now(),
+							Provider: cfg.CurrentProvider,
+							Model:    cfg.CurrentModel,
+							Input:    ev.InputTok,
+							Output:   ev.OutputTok,
+							CostUSD:  ev.CostUSD,
+							KeyKind:  keyKindOf(cfg, kind),
+						})
+						fmt.Fprintf(os.Stderr, "$ %.4f this request · %.2f today\n",
+							ev.CostUSD, usage.WindowSumFor(cfg.CurrentProvider, usage.Embedded))
+					}
 				}
-			case "usage":
-				if ev.CostUSD > 0 {
-					usage.Add(usage.Entry{
-						Time:     time.Now(),
-						Provider: cfg.CurrentProvider,
-						Model:    cfg.CurrentModel,
-						Input:    ev.InputTok,
-						Output:   ev.OutputTok,
-						CostUSD:  ev.CostUSD,
-						KeyKind:  keyKindOf(cfg, kind),
-					})
-					fmt.Fprintf(os.Stderr, "$ %.4f this request · %.2f today\n",
-						ev.CostUSD, usage.WindowSumFor(cfg.CurrentProvider, usage.Embedded))
-				}
-			}
-		})
+			})
+		if lastErr == nil {
+			break
+		}
+		if ctx.Err() != nil || !agent.Retriable(lastErr) {
+			break
+		}
+	}
 	fmt.Println()
 	a.Close()
-	return err
+	return lastErr
 }
 
 // keyKindOf attributes billing to the right credential bucket: custom

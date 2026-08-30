@@ -2,6 +2,21 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.16
+
+### Fixed
+- **The AI "having no tools" on Mihani Pro.** The gateway now supports real OpenAI function calling (verified by probe: streamed `tool_calls` with `finish_reason: tool_calls`), so Mihani Pro and any seekai-host provider send native tools instead of the fragile text-based tool protocol. Opus models frequently refused the text protocol and answered in prose ("I can't write files here") — that failure mode is gone. Older configs' stale `native_tools: false` is upgraded automatically on load.
+- **Turns dying without continuing when the reply hit the output token limit.** A response cut off mid tool-call (truncated JSON arguments) or an empty stream at `finish_reason: length` now continues the same turn with an in-conversation nudge to split work into smaller chunks (budget: 3 nudges per turn) instead of surfacing a dead error. Default max output tokens raised 8192 → 16384 so long single-file writes stop getting cut off.
+- **Provider credit exhaustion was a silent-ish hard stop.** 402 / credit / balance / quota errors are now recognized and surfaced with the exact fix: reset the usage window in /settings, add a personal key, or switch provider. They are never retried.
+- **Text selection deadlocked after clicking a message.** While the message menu was open, every mouse event was dropped — after one click the user could not drag-select any text until pressing esc. Clicking a menu item row now selects it, clicking anywhere else closes the menu, and a click outside the menu box closes it AND immediately arms a drag selection.
+- **Long pastes were split and half-sent.** Bracketed paste (one clipboard block) is now inserted into the composer as one multiline message with a "pasted N lines" indicator and never auto-sent. For terminals without bracketed paste, a fast paste burst ending in Enter on a multiline composer keeps the newline instead of submitting the first half.
+
+### Added
+- **`web_search` tool** — web search results (title, URL, snippet) without any API key, so the agent can find sources and image URLs on its own.
+- **`web_fetch` tool** — fetch any URL as readable text, or pass `save_to` to download raw bytes (images, assets) into the workspace, e.g. for a website's photos.
+- **`glob` tool** — find files by pattern (`**/*.go`, `*.png`) with vendored directories skipped.
+- **`bash` timeout parameter** — long-running commands (downloads, builds) can pass `timeout` up to 300s instead of being cut at 60s.
+
 ## v0.2.15
 
 ### Added

@@ -52,6 +52,9 @@ type Agent struct {
 	mcp           map[string]*mcp.Client
 	mcpTools      []map[string]any
 	tokens        int
+	lastFinish    string // finish_reason of the latest request ("stop", "length", "tool_calls")
+	lengthNudges  int    // per-turn continuation nudges after a "length" finish
+	proseNudges   int    // per-turn nudges when the model dumps file content as text
 }
 
 func (a *Agent) Reset()                           { a.history = nil; a.tokens = 0 }
@@ -84,6 +87,8 @@ func (a *Agent) Send(ctx context.Context, prompt, mode string, approve func(stri
 	}
 	pricing.SetOverrides(a.Cfg.Pricing)
 	a.tokens += estimateTokens(prompt)
+	a.lengthNudges = 0 // continuation budget is per turn
+	a.proseNudges = 0  // prose-dump nudge budget is per turn
 	if err := a.ensureMCP(ctx, emit); err != nil {
 		emit(Event{Kind: "activity", Text: "MCP unavailable: " + err.Error()})
 	}
@@ -110,11 +115,78 @@ func (a *Agent) sendOpenAI(ctx context.Context, p config.Provider, prompt, mode 
 		a.compactHistory()
 		assistant, calls, apiIn, apiOut, responseChars, err := a.openAIRequest(ctx, p, true, emit)
 		if err != nil {
+			// The response hit the max output token limit: the model was cut
+			// off (often mid tool call, leaving unparseable arguments that
+			// used to fail the whole turn). Continue the same turn with a
+			// nudge to split work into smaller chunks — the user sees the
+			// agent carry on instead of a dead red error.
+			if errors.Is(err, errTruncated) && a.lastFinish == "length" && a.lengthNudges < 3 {
+				a.lengthNudges++
+				a.history = append(a.history, map[string]any{"role": "user", "content": "Your previous reply was cut off at the maximum output token limit. " +
+					"Continue the task from where it stopped. Split large file writes into several smaller write_file/edit_file calls so one reply never exceeds the limit."})
+				emit(Event{Kind: "activity", Text: "continuing (previous reply hit the token limit)"})
+				continue
+			}
 			return err
 		}
 		a.trackUsage(apiIn, apiOut, responseChars, emit)
 		a.history = append(a.history, assistant)
 		if len(calls) == 0 {
+			// Defense in depth #2 (build mode): some models still dump file
+			// content as plain text instead of calling write_file — the exact
+			// "here, save this as index.html" failure mode. A reply cut off
+			// at the output token limit is treated the same: it almost always
+			// means the model is writing a whole file in one giant reply.
+			// Nudge them back to the tools in smaller chunks; the bounded
+			// budget prevents nudge loops.
+			if c, _ := assistant["content"].(string); c != "" && mode == "build" && a.proseNudges < 3 &&
+				(looksLikeCodeDump(c) || (a.lastFinish == "length" && len(c) > 1000)) {
+				a.proseNudges++
+				reason := "it looks like pasted file content"
+				if a.lastFinish == "length" {
+					reason = "it was cut off at the maximum output token limit"
+				}
+				a.history = append(a.history, map[string]any{"role": "user", "content": "Your previous reply " + reason + ". Do not paste file content in chat. " +
+					"Use the write_file / edit_file tools to create or modify files instead, " +
+					"one file per call, in smaller chunks for large files. Continue the task."})
+				emit(Event{Kind: "activity", Text: "nudging: use file tools instead of pasting code"})
+				continue
+			}
+			if c, _ := assistant["content"].(string); c != "" {
+				if textCalls, _ := extractToolCalls(c); len(textCalls) > 0 {
+					emit(Event{Kind: "activity", Text: "parsing tool call from reply text"})
+					var results strings.Builder
+					for _, call := range textCalls {
+						result, runErr := a.runTool(ctx, call.Name, call.Input, call.ID, approve, emit)
+						if runErr != nil {
+							return runErr
+						}
+						status := "ok"
+						if strings.HasPrefix(result, "ERROR") || strings.Contains(result, "User declined") {
+							status = "error"
+						}
+						fmt.Fprintf(&results, "<tool_result name=%q id=%q status=%q>\n%s\n</tool_result>\n",
+							call.Name, call.ID, status, clip(result, historyToolLimit))
+					}
+					a.history = append(a.history, map[string]any{"role": "user", "content": results.String()})
+					continue
+				}
+			}
+			if c, _ := assistant["content"].(string); strings.TrimSpace(c) == "" {
+				// Empty stream that ended at the token limit: continue the
+				// turn with a nudge instead of a dead "empty response" error.
+				if a.lastFinish == "length" && a.lengthNudges < 3 {
+					a.lengthNudges++
+					a.history = append(a.history, map[string]any{"role": "user", "content": "Your previous reply was empty and the stream ended at the maximum output token limit. " +
+						"Continue: finish the task in smaller steps so each reply stays under the limit."})
+					emit(Event{Kind: "activity", Text: "continuing (previous reply hit the token limit)"})
+					continue
+				}
+				// A completed stream with no text and no tool calls means the
+				// upstream dropped the response; retry via the reconnect loop
+				// instead of showing a silent blank reply.
+				return errEmptyResponse
+			}
 			emit(Event{Kind: "done", Done: true})
 			return nil
 		}
@@ -229,6 +301,9 @@ func (a *Agent) openAIRequest(ctx context.Context, p config.Provider, useTools b
 			continue
 		}
 		delta := chunk.Choices[0].Delta
+		if chunk.Choices[0].FinishReason != "" {
+			a.lastFinish = chunk.Choices[0].FinishReason
+		}
 		if delta.ReasoningContent != "" || delta.Reasoning != "" {
 			part := delta.ReasoningContent + delta.Reasoning
 			responseChars += len(part)
@@ -272,8 +347,12 @@ func (a *Agent) openAIRequest(ctx context.Context, p config.Provider, useTools b
 	for _, index := range indexes {
 		state := calls[index]
 		input := map[string]any{}
-		if json.Unmarshal([]byte(state.Arguments), &input) != nil {
-			input = map[string]any{"arguments": state.Arguments}
+		if err := json.Unmarshal([]byte(state.Arguments), &input); err != nil {
+			// The stream ended mid tool call: partial JSON arguments are not
+			// a valid payload for any tool. A sentinel error lets the caller
+			// decide: "length" finish gets an in-turn continuation nudge,
+			// anything else retries via the reconnect loop.
+			return nil, nil, 0, 0, 0, fmt.Errorf("%w: %s", errTruncated, state.Name)
 		}
 		id := state.ID
 		if id == "" {
@@ -660,6 +739,42 @@ type providerHTTPError struct {
 
 func (e *providerHTTPError) Error() string { return e.message }
 
+// providerCreditError marks a provider response that says the account budget
+// or credits are exhausted (402, or a 4xx whose body names credits/balance/
+// quota). Never retriable: retrying repeats the same denial; the user must
+// reset the local usage window, add a personal key, or switch provider.
+type providerCreditError struct {
+	status  int
+	message string
+}
+
+func (e *providerCreditError) Error() string { return e.message }
+
+// Sentinel stream failures. errTruncated is wrapped by errors.Is checks so
+// the caller can branch on the finish reason instead of parsing strings.
+var (
+	errTruncated     = errors.New("provider response truncated mid tool-call")
+	errEmptyResponse = errors.New("provider returned an empty response")
+)
+
+var creditWords = []string{"credit", "balance", "quota", "insufficient", "billing", "payment", "subscription", "arrear"}
+
+func looksLikeCreditExhausted(status int, body string) bool {
+	if status == 402 {
+		return true
+	}
+	if status != 400 && status != 403 {
+		return false
+	}
+	b := strings.ToLower(body)
+	for _, w := range creditWords {
+		if strings.Contains(b, w) {
+			return true
+		}
+	}
+	return false
+}
+
 // Retriable reports whether a failed turn is worth retrying. Transport
 // failures (connection refused, timeout, reset) and server-side responses
 // are; user cancellation and client errors (4xx: auth, model, payload) are
@@ -671,6 +786,10 @@ func Retriable(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
+	var creditErr *providerCreditError
+	if errors.As(err, &creditErr) {
+		return false // budget denial: retrying repeats the same failure
+	}
 	var httpErr *providerHTTPError
 	if errors.As(err, &httpErr) {
 		return httpErr.status == 408 || httpErr.status == 429 || httpErr.status >= 500
@@ -680,6 +799,7 @@ func Retriable(err error) bool {
 
 func providerError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	bodyStr := string(body)
 	var payload struct {
 		Error struct {
 			Message string `json:"message"`
@@ -691,13 +811,23 @@ func providerError(resp *http.Response) error {
 		if label != "" {
 			label += ": "
 		}
-		return &providerHTTPError{status: resp.StatusCode, message: fmt.Sprintf("provider returned %s — %s%s", resp.Status, label, payload.Error.Message)}
+		msg := fmt.Sprintf("provider returned %s — %s%s", resp.Status, label, payload.Error.Message)
+		if looksLikeCreditExhausted(resp.StatusCode, msg) {
+			return &providerCreditError{status: resp.StatusCode, message: msg +
+				" The provider reports exhausted credits/budget — open /settings → “Reset usage window”, add your personal API key, or switch provider with /providers"}
+		}
+		return &providerHTTPError{status: resp.StatusCode, message: msg}
 	}
-	excerpt := strings.TrimSpace(string(body))
-	if excerpt == "" {
-		return &providerHTTPError{status: resp.StatusCode, message: fmt.Sprintf("provider returned %s", resp.Status)}
+	excerpt := strings.TrimSpace(bodyStr)
+	msg := fmt.Sprintf("provider returned %s", resp.Status)
+	if excerpt != "" {
+		msg = fmt.Sprintf("provider returned %s — %s", resp.Status, clip(excerpt, 300))
 	}
-	return &providerHTTPError{status: resp.StatusCode, message: fmt.Sprintf("provider returned %s — %s", resp.Status, clip(excerpt, 300))}
+	if looksLikeCreditExhausted(resp.StatusCode, msg) {
+		return &providerCreditError{status: resp.StatusCode, message: msg +
+			" The provider reports exhausted credits/budget — open /settings → “Reset usage window”, add your personal API key, or switch provider with /providers"}
+	}
+	return &providerHTTPError{status: resp.StatusCode, message: msg}
 }
 
 func estimateTokens(s string) int {
@@ -748,6 +878,21 @@ func supportsEffort(model string) bool {
 	return false
 }
 
+// looksLikeCodeDump heuristically detects a reply that pastes file content
+// as prose (fenced code blocks or raw markup/JS long enough to be a real
+// file) rather than using the file tools.
+func looksLikeCodeDump(c string) bool {
+	if len(c) < 3000 {
+		return false
+	}
+	for _, marker := range []string{"```", "<!DOCTYPE", "<html", "function ", "const ", "def ", "import "} {
+		if strings.Contains(c, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 var modeGuidance = map[string]string{
 	"":         "",
 	"build":    "You may edit files and run commands to complete the task directly.",
@@ -782,7 +927,7 @@ func SystemPrompt(mode, root string) string {
 	return b.String()
 }
 
-const basePrompt = "You are Mihani Code, a concise terminal coding agent. Inspect before editing. Explain changes briefly. Never claim a change was made unless a tool succeeded. Keep output practical. Prefer edit_file over rewriting whole files. Use markdown formatting in responses. For multi-step work (3+ steps), create a visible task list with the todo_write tool up front and update item statuses (pending, in_progress, done) as you progress. When a decision genuinely needs the user, use the ask_user tool with concrete options instead of guessing."
+const basePrompt = "You are Mihani Code, a concise terminal coding agent. Inspect before editing. Explain changes briefly. Never claim a change was made unless a tool succeeded. Keep output practical. Prefer edit_file over rewriting whole files. NEVER paste full file content in your reply — create or modify files only with the write_file/edit_file tools (several smaller calls for large files); chat text is for explanations and summaries. Use markdown formatting in responses. For multi-step work (3+ steps), create a visible task list with the todo_write tool up front and update item statuses (pending, in_progress, done) as you progress. When a decision genuinely needs the user, use the ask_user tool with concrete options instead of guessing. You have exactly the tools listed in the tool section: never claim a tool is unavailable, never pretend to have tools that are not listed, and if a tool call is rejected, correct the arguments against the listed schema and continue rather than giving up."
 
 func workspaceContext(root string) string {
 	var b strings.Builder

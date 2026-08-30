@@ -39,6 +39,65 @@ func (m *Model) closeOverlay() {
 	m.msgMenuIndex = 0
 }
 
+// overlayItemRows returns the visible item window (start offset) and the
+// screen rows the item list occupies, matching overlayView's layout:
+// border, pad, title, blank, items..., blank, hint, pad, border.
+func (m *Model) overlayGeometry() (boxTop, itemTop, itemRows int) {
+	lines := strings.Split(m.overlayView(), "\n")
+	top := -1
+	for y, l := range lines {
+		if strings.TrimSpace(stripANSI(l)) != "" {
+			top = y
+			break
+		}
+	}
+	if top < 0 {
+		return -1, -1, 0
+	}
+	const visible = 12
+	start := 0
+	if len(m.overlayItems) > visible {
+		start = maxInt(0, minInt(len(m.overlayItems)-visible, m.overlayIndex-visible/2))
+	}
+	return top, top + 4, len(m.overlayItems) - start
+}
+
+// mouseOverlayClick maps a left press onto the open menu: an item row
+// selects that item, anything else closes the menu; a press outside the box
+// additionally arms a drag selection at that point so the same click can
+// start selecting text.
+func (m *Model) mouseOverlayClick(x tea.MouseMsg) {
+	boxTop, itemTop, itemRows := m.overlayGeometry()
+	if boxTop < 0 {
+		m.closeOverlay()
+		return
+	}
+	// Box bottom: item rows + blank + hint + pad + border.
+	boxBottom := itemTop + itemRows + 3
+	inBox := x.Y >= boxTop && x.Y <= boxBottom && x.X < m.width
+	if !inBox {
+		m.closeOverlay()
+		if x.Y >= 1 {
+			m.mousePress(x) // arm a possible drag selection now
+		}
+		return
+	}
+	if x.Y >= itemTop && x.Y < itemTop+itemRows {
+		start := 0
+		const visible = 12
+		if len(m.overlayItems) > visible {
+			start = maxInt(0, minInt(len(m.overlayItems)-visible, m.overlayIndex-visible/2))
+		}
+		idx := start + (x.Y - itemTop)
+		if idx < len(m.overlayItems) {
+			m.overlayIndex = idx
+			m.selectOverlayItem()
+			return
+		}
+	}
+	m.closeOverlay()
+}
+
 // openMessageMenu shows Revert / Fork / Copy actions for a user message,
 // reached by mouse-click on the message box.
 func (m *Model) openMessageMenu(blockIdx int) {
@@ -225,12 +284,14 @@ func (m *Model) command(s string) tea.Cmd {
 		for _, item := range commands {
 			rows = append(rows, fmt.Sprintf("%-11s %s", item.name, item.description))
 		}
-		keys := "enter send · ctrl+j newline · tab/shift+tab cycle modes · esc (twice) stop request\n" +
-			"ctrl+r cycle reasoning effort (off/low/medium/high) · /effort menu\n" +
-			"↑↓/pgup/pgdn scroll · drag to select text, release copies it\n" +
-			"click a message → revert/fork/copy menu · [ ] pick a message → y copy · f fork · r revert\n" +
-			"ctrl+y or /copy copy last reply\n" +
-			"ctrl+c cancel request or quit"
+			keys := "enter send · ctrl+j newline · tab/shift+tab cycle modes · esc (twice) stop request\n" +
+				"ctrl+r cycle reasoning effort (off/low/medium/high) · /effort menu\n" +
+				"pasting a multiline block keeps it in the composer as one message (enter sends it whole)\n" +
+				"↑↓/pgup/pgdn scroll · drag to select text, release copies it\n" +
+				"click a message → revert/fork/copy menu · click elsewhere closes the menu\n" +
+				"[ ] pick a message → y copy · f fork · r revert\n" +
+				"ctrl+y or /copy copy last reply\n" +
+				"ctrl+c cancel request or quit"
 		m.appendBlock(&block{kind: blockInfo, content: "Commands\n" + strings.Join(rows, "\n") + "\n\nKeys\n" + keys})
 
 	case "/clear":

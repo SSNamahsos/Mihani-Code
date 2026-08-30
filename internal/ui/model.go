@@ -188,6 +188,13 @@ type Model struct {
 	escArmed   bool // double-press confirmation for interrupting a request
 	escArmedAt time.Time
 
+	// Paste burst tracking: terminals without bracketed paste deliver a
+	// clipboard as a raw stream of key events, where every newline arrives
+	// as an Enter key. A burst of runes immediately before an Enter on a
+	// multiline composer is treated as a literal newline, not a submit.
+	lastKeyAt  time.Time
+	burstRunes int
+
 	selOn      bool  // mouse-drag selection in progress
 	selDrag    bool  // drag actually moved (else it's a click)
 	selA       selPos
@@ -553,8 +560,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		mouseDebugLog(x, m)
-		if m.overlay != "" || m.connectOpen || m.keyEditOpen || m.pendingApproval != nil || m.pendingAsk != nil {
+		if m.connectOpen || m.keyEditOpen || m.pendingApproval != nil || m.pendingAsk != nil {
 			break
+		}
+		if m.overlay != "" {
+			// An open menu must not swallow the mouse: clicking an item row
+			// selects it, clicking anywhere else closes the menu — and a click
+			// outside the box immediately arms a drag selection. Previously all
+			// mouse input was dropped while a menu was open, so after one
+			// click on a message the user could not select any text until
+			// pressing esc on the keyboard.
+			if x.Button == tea.MouseButtonLeft && x.Action == tea.MouseActionPress {
+				m.mouseOverlayClick(x)
+			}
+			return m, nil
 		}
 		switch {
 		case x.Action == tea.MouseActionPress && x.Button == tea.MouseButtonWheelUp:
@@ -605,6 +624,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleKey processes global key bindings; ok reports whether the key was consumed.
 func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	key := x.String()
+
+	// Bracketed paste: the whole pasted block arrives as ONE KeyMsg
+	// (newlines included). Insert it verbatim and never let it submit —
+	// this is how long pastes land in a single message. In the special
+	// modal states (connect/key editor/ask/approval) fall through so the
+	// focused input keeps its own behavior.
+	if x.Paste && len(x.Runes) > 0 &&
+		m.overlay == "" && !m.connectOpen && !m.keyEditOpen &&
+		m.pendingApproval == nil && m.pendingAsk == nil && !m.focusActive {
+		m.input.InsertString(string(x.Runes))
+		m.resizeComposer()
+		if lines := strings.Count(string(x.Runes), "\n") + 1; lines > 1 {
+			m.notify(fmt.Sprintf("pasted %d lines — enter sends the whole thing", lines))
+		}
+		return m, nil, true
+	}
+
+	// Track the rune burst for the raw-paste Enter guard (below).
+	if x.Type == tea.KeyRunes {
+		now := time.Now()
+		if now.Sub(m.lastKeyAt) > 150*time.Millisecond {
+			m.burstRunes = 0
+		}
+		m.burstRunes += len(x.Runes)
+		m.lastKeyAt = now
+	}
 
 	switch {
 	case key == "ctrl+c":
@@ -806,6 +851,14 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		if value == "" {
 			return m, nil, true
 		}
+		// Raw (non-bracketed) paste guard: a fast burst of pasted runes that
+		// ends in a newline on a multiline composer is still paste, not a
+		// deliberate submit — keep the newline in the text.
+		if m.pasteBurstEnter() {
+			m.input.InsertString("\n")
+			m.resizeComposer()
+			return m, nil, true
+		}
 		if m.busy {
 			if !strings.HasPrefix(value, "/") {
 				m.queued = value
@@ -819,6 +872,17 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, m.submit(value), true
 	}
 	return m, nil, false
+}
+
+// pasteBurstEnter reports whether this Enter is almost certainly the
+// final newline of a pasted block arriving as raw keystrokes: the composer
+// already holds multiple lines, a burst of runes arrived just before it,
+// and it was too fast for deliberate typing (~60+ chars/sec).
+func (m *Model) pasteBurstEnter() bool {
+	lines := strings.Count(m.input.Value(), "\n") + 1
+	return lines > 1 &&
+		time.Since(m.lastKeyAt) < 150*time.Millisecond &&
+		m.burstRunes >= 8
 }
 
 func (m *Model) interrupt() {

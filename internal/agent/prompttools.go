@@ -85,10 +85,11 @@ func (a *Agent) openAIChatText(ctx context.Context, p config.Provider, emit func
 }
 
 var (
-	taggedCallRe   = regexp.MustCompile(`(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>`)
-	fencedCallRe   = regexp.MustCompile("(?s)```(?:tool_call|json)?\\s*\n(\\{.*?\\})\n```")
-	looseJSONRe    = regexp.MustCompile(`(?s)\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{.*?\}\s*\}`)
-	whitespaceOnly = regexp.MustCompile(`^\s*$`)
+	toolCallOpenTag = "<tool_call>"
+	taggedCallRe    = regexp.MustCompile(`(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>`)
+	fencedCallRe    = regexp.MustCompile("(?s)```(?:tool_call|json)?\\s*\n(\\{.*?\\})\n```")
+	looseJSONRe     = regexp.MustCompile(`(?s)\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{.*?\}\s*\}`)
+	whitespaceOnly  = regexp.MustCompile(`^\s*$`)
 )
 
 // extractToolCalls pulls every well-formed tool call out of an assistant
@@ -100,6 +101,13 @@ func extractToolCalls(text string) ([]toolCall, error) {
 		{re: fencedCallRe, group: 1},
 	}, text)
 	if len(blocks) == 0 {
+		// A tool_call that was opened but never closed means the provider
+		// stream ended mid-block. Surface it as a parse error so the turn
+		// gets a corrective hint instead of silently ending with a
+		// half-call rendered to the user.
+		if strings.Contains(text, toolCallOpenTag) {
+			return nil, fmt.Errorf("the tool call block was cut off before its closing tag — the reply appears truncated; resend one complete tool_call block")
+		}
 		trimmed := strings.TrimSpace(stripTags(text))
 		if looseJSONRe.MatchString(trimmed) {
 			blocks = looseJSONRe.FindAllString(trimmed, -1)
@@ -181,6 +189,7 @@ func (a *Agent) sendPromptBased(ctx context.Context, p config.Provider, prompt, 
 		map[string]any{"role": "system", "content": system},
 		map[string]any{"role": "user", "content": prompt},
 	)
+	parseFailures := 0
 	for iteration := 1; iteration <= a.iterations(); iteration++ {
 		emit(Event{Kind: "activity", Text: "thinking", Iteration: iteration})
 		a.compactHistory()
@@ -195,11 +204,18 @@ func (a *Agent) sendPromptBased(ctx context.Context, p config.Provider, prompt, 
 			// No usable call: if the model attempted one and botched it, tell
 			// it how to fix that; otherwise the turn is complete.
 			if parseErr != nil && !whitespaceOnly.MatchString(content) {
+				parseFailures++
 				hint := "Reply with exactly one <tool_call>{\"name\": ..., \"arguments\": {...}}</tool_call> block."
 				if strings.Contains(content, "node -e") || strings.Contains(content, "python -c") {
 					hint = "Inline scripts with nested quotes break JSON. Instead: use write_file to save a temp .js/.py file, then run it with bash."
 				} else if strings.Count(content, "\\\"") > 0 {
 					hint = "Escape quotes carefully or prefer single quotes inside command strings; simpler commands parse more reliably."
+				}
+				if parseFailures >= 2 {
+					// Repeated parse failures (often hallucinated argument
+					// fields): re-send the exact schemas so the model can
+					// self-correct instead of repeating the mistake.
+					hint += "\n\nYour previous calls did not parse. Use the EXACT argument names from these schemas and do not invent fields:\n" + a.toolCatalog()
 				}
 				a.history = append(a.history,
 					map[string]any{"role": "assistant", "content": content},
@@ -212,6 +228,7 @@ func (a *Agent) sendPromptBased(ctx context.Context, p config.Provider, prompt, 
 			return nil
 		}
 
+		parseFailures = 0
 		a.history = append(a.history, map[string]any{"role": "assistant", "content": content})
 		var results strings.Builder
 		for _, call := range calls {
