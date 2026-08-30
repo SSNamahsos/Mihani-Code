@@ -245,6 +245,47 @@ func TestKeyFallsBackToPersonalKey(t *testing.T) {
 	}
 }
 
+// Regression: a stale in-memory copy saving over the file must not delete
+// user-added providers and their keys (multi-instance data loss).
+func TestSavePreservesDiskProvidersMissingFromMemory(t *testing.T) {
+	isolatedHome(t)
+	disk := defaults()
+	disk.Providers["mygw"] = Provider{Label: "MyGW", Type: "openai", BaseURL: "http://x.example/v1", PersonalKey: "sk-precious-key-123456"}
+	if err := disk.Save(); err != nil {
+		t.Fatal(err)
+	}
+	// A stale in-memory copy without mygw (second instance) saves.
+	stale := defaults()
+	if err := stale.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Providers["mygw"].PersonalKey; got != "sk-precious-key-123456" {
+		t.Fatalf("stale save must not delete a disk provider and its key, got %q", got)
+	}
+	// Memory still wins on conflict.
+	loaded.Providers["mygw"] = Provider{Label: "MyGW v2", Type: "openai", BaseURL: "http://y.example/v1", PersonalKey: "sk-new"}
+	if err := loaded.Save(); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := Load()
+	if again.Providers["mygw"].PersonalKey != "sk-new" || again.Providers["mygw"].BaseURL != "http://y.example/v1" {
+		t.Fatalf("in-memory values must win over disk on conflict: %#v", again.Providers["mygw"])
+	}
+	// Migration-driven deletions still win on save.
+	again.Providers["openrouter"] = Provider{Label: "OpenRouter"}
+	if err := again.Save(); err != nil {
+		t.Fatal(err)
+	}
+	final, _ := Load()
+	if _, ok := final.Providers["openrouter"]; ok {
+		t.Fatal("legacy id was resurrected by the save merge")
+	}
+}
+
 // Older releases shipped openai/openrouter/anthropic built-ins. They must
 // disappear on load, and a selection pointing at them falls back cleanly.
 func TestMigrateDropsRemovedLegacyProviders(t *testing.T) {

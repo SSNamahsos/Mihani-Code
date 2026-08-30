@@ -226,6 +226,7 @@ func (c Config) ProviderLabel() string {
 }
 
 func (c Config) Save() error {
+	c.mergeDiskProviders()
 	p := path()
 	if e := os.MkdirAll(filepath.Dir(p), 0700); e != nil {
 		return e
@@ -235,6 +236,48 @@ func (c Config) Save() error {
 		return e
 	}
 	return os.WriteFile(p, b, 0600)
+}
+
+// mergeDiskProviders preserves user-added providers that exist on disk but
+// not in this copy of the config. Every Save writes the whole file, so a
+// stale in-memory copy (a second running instance, or a session that started
+// before /connect) would otherwise silently delete providers and their keys.
+// There is no provider-deletion UI, so merging can never resurrect anything
+// the user intentionally removed; ids dropped by migration still stay gone.
+func (c *Config) mergeDiskProviders() {
+	if c.Providers == nil {
+		return
+	}
+	existing, e := Load()
+	if e != nil || existing.Providers == nil {
+		return
+	}
+	merged := make(map[string]Provider, len(c.Providers))
+	for name, p := range c.Providers {
+		merged[name] = p
+	}
+	for name, p := range existing.Providers {
+		if _, ok := merged[name]; ok {
+			continue
+		}
+		if isLegacyID(name) {
+			continue
+		}
+		merged[name] = p
+	}
+	c.Providers = merged
+}
+
+func isLegacyID(name string) bool {
+	if _, ok := legacyBuiltinIDs[name]; ok {
+		return true
+	}
+	for _, id := range legacyRemovedIDs {
+		if name == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (c Config) Key(name string) string {

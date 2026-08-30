@@ -2,6 +2,11 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.13
+
+### Fixed
+- **Provider and API key data loss with multiple windows open.** Every config save wrote the whole file from memory, so a stale instance (started before `/connect`, or a second open window) could silently delete recently added providers and their keys on its next save. Saves now merge: providers that exist on disk but not in memory are preserved; in-memory values win on conflict; migration-driven deletions still win.
+
 ## v0.2.12
 
 ### Fixed
