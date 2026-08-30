@@ -195,6 +195,9 @@ type Model struct {
 	lastKeyAt  time.Time
 	burstRunes int
 
+	reconnectFailures int // consecutive provider failures since the last live progress (reset when the AI keeps working)
+	lastRetries       int // retries the previous turn needed; shown in its error block
+
 	selOn      bool  // mouse-drag selection in progress
 	selDrag    bool  // drag actually moved (else it's a click)
 	selA       selPos
@@ -1330,7 +1333,13 @@ func (m *Model) runTurn(ctx context.Context, prompt, modeName string, approve fu
 	for attempt := 1; attempt <= maxTurnAttempts; attempt++ {
 		if attempt > 1 {
 			delay := turnBackoffs[minInt(attempt-2, len(turnBackoffs)-1)]
-			m.activity = fmt.Sprintf("reconnecting %d/%d · retry in %ds", attempt, maxTurnAttempts, int(delay.Seconds()))
+			// Count consecutive failures in the CURRENT episode: live provider
+			// progress resets m.reconnectFailures (see handle), so after the AI
+			// has worked and then drops again the counter restarts from 1/10
+			// instead of continuing e.g. from 8/10. N = how many attempts in a
+			// row the provider has failed since it last produced output.
+			m.reconnectFailures++
+			m.activity = fmt.Sprintf("reconnecting %d/%d · retry in %ds", m.reconnectFailures, maxTurnAttempts, int(delay.Seconds()))
 			m.status = m.activity
 			m.refreshView()
 			select {
@@ -1344,12 +1353,16 @@ func (m *Model) runTurn(ctx context.Context, prompt, modeName string, approve fu
 		}
 		lastErr = a.Send(ctx, prompt, modeName, approve, emit)
 		if lastErr == nil {
+			m.reconnectFailures = 0
 			return nil
 		}
 		if ctx.Err() != nil || !agent.Retriable(lastErr) {
+			m.reconnectFailures = 0
 			return lastErr
 		}
 	}
+	m.lastRetries = maxTurnAttempts - 1
+	m.reconnectFailures = 0
 	return lastErr
 }
 
@@ -1370,8 +1383,13 @@ func (m *Model) finishTurn(x resultMsg) tea.Cmd {
 	case cancelled:
 		m.appendBlock(&block{kind: blockInfo, content: "request cancelled"})
 	default:
-		m.appendBlock(&block{kind: blockError, content: err.Error()})
+		content := err.Error()
+		if m.lastRetries > 0 {
+			content += fmt.Sprintf("\n(retried %d times with growing delay - the provider kept failing, so token usage went up while reconnecting)", m.lastRetries)
+		}
+		m.appendBlock(&block{kind: blockError, content: content})
 	}
+	m.lastRetries = 0
 	m.refreshView()
 	if queued := m.queued; queued != "" {
 		m.queued = ""
@@ -1381,6 +1399,14 @@ func (m *Model) finishTurn(x resultMsg) tea.Cmd {
 }
 
 func (m *Model) handle(e agent.Event) {
+	// Live provider output (streamed text/reasoning, tool calls) proves the
+	// connection is working again; the reconnect counter restarts from zero
+	// on the next failure. "activity"/"thinking" are emitted optimistically
+	// before every request, so they don't count as progress.
+	switch e.Kind {
+	case "text", "reasoning", "tool_start", "tool", "tool_done", "done":
+		m.reconnectFailures = 0
+	}
 	switch e.Kind {
 	case "reasoning", "thinking":
 		if e.Text == "" {

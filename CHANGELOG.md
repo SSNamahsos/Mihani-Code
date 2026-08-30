@@ -2,6 +2,15 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.17
+
+### Fixed
+- **Reconnect counter continued across failure episodes.** After the AI kept working following a reconnect and the connection dropped again, the counter kept climbing (e.g. 8/10, 9/10) instead of restarting. It now counts consecutive failures since the provider last produced real output — after live progress the counter restarts from 1/10. The per-turn attempt cap of 10 is unchanged. (The optimistic "thinking" marker sent before every request does not count as progress; only streamed text/reasoning/tool calls do.)
+- **Silent token usage spike after a failed turn.** Every reconnect retry re-sends the prompt, so a failed turn could burn tokens while the UI only showed a red error. The error block now states how many times the provider was retried, e.g. `(retried 9 times with growing delay - the provider kept failing, so token usage went up while reconnecting)`.
+
+### Notes
+- This release also ships all v0.2.16 fixes (message-menu/selection mouse deadlock, long-paste handling, native tools on Mihani Pro, token-limit continuation) — v0.2.16 was never published.
+
 ## v0.2.16
 
 ### Fixed

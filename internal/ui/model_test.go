@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -738,7 +739,7 @@ func TestTurnRetriesRetriableFailures(t *testing.T) {
 	if calls != 3 {
 		t.Fatalf("expected 2 failures + 1 success, got %d calls", calls)
 	}
-	if !strings.Contains(m.activity, "reconnecting 3/10") {
+	if !strings.Contains(m.activity, "reconnecting 2/10") {
 		t.Fatalf("status should show reconnect progress, got %q", m.activity)
 	}
 	if got := len(m.agent.History()); got != 3 {
@@ -769,6 +770,99 @@ func TestTurnDoesNotRetryAuthFailures(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("401 must not be retried, got %d calls", calls)
+	}
+}
+
+// Regression: after the provider has actually produced output (the AI
+// "continues"), a later failure must restart the reconnect counter from
+// 1/10 instead of continuing from where it left off (e.g. 8/10). The
+// optimistic "thinking" activity that precedes every request does NOT count
+// as progress.
+func TestReconnectCounterRestartsAfterLiveProgress(t *testing.T) {
+	isolatedUsageHome(t)
+	orig := turnBackoffs
+	turnBackoffs = []time.Duration{10 * time.Millisecond, 10 * time.Millisecond, 10 * time.Millisecond, 10 * time.Millisecond}
+	defer func() { turnBackoffs = orig }()
+
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls <= 2 {
+			w.WriteHeader(502)
+			_, _ = w.Write([]byte(`{"error":{"message":"bad gateway"}}`))
+			return
+		}
+		if calls == 3 {
+			// Real live progress (a streamed text delta), then a
+			// truncated tool call: the retriable errTruncated failure
+			// happens AFTER the provider already produced output.
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"part\"}}]}\n\n"))
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"bash\",\"arguments\":\"{\\\"command\\\":\"}}]}}]}\n\n"))
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"))
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	m := newTestModel(100, 40)
+	m.cfg = config.Config{CurrentProvider: "t", CurrentModel: "m", MaxTokens: 64,
+		Providers: map[string]config.Provider{"t": {Type: "openai", BaseURL: server.URL + "/v1"}}}
+	m.agent = &agent.Agent{Cfg: m.cfg, Client: server.Client()}
+
+	// Wire the agent's events through the model exactly like the live app
+	// (eventMsg -> Update -> handle), and record the activity label in
+	// force when each request starts.
+	var labels []string
+	emit := func(ev agent.Event) {
+		if ev.Kind == "activity" && ev.Text == "thinking" {
+			labels = append(labels, m.activity)
+		}
+		m.handle(ev)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := m.runTurn(ctx, "hello", "build", func(string, map[string]any) bool { return true }, emit)
+	if err != nil {
+		t.Fatalf("turn should succeed after retries, got %v", err)
+	}
+	if calls != 4 {
+		t.Fatalf("expected 3 failures + 1 success, got %d calls", calls)
+	}
+	if len(labels) != 4 {
+		t.Fatalf("expected 4 request-start labels, got %d: %q", len(labels), labels)
+	}
+	if !strings.Contains(labels[1], "reconnecting 1/10") {
+		t.Fatalf("first retry should read 1/10, got %q", labels[1])
+	}
+	if !strings.Contains(labels[2], "reconnecting 2/10") {
+		t.Fatalf("consecutive failure should climb to 2/10, got %q", labels[2])
+	}
+	if !strings.Contains(labels[3], "reconnecting 1/10") {
+		t.Fatalf("counter must restart after live progress, got %q", labels[3])
+	}
+}
+
+// The error block after a give-up must explain the token usage spike:
+// how many times the provider was retried.
+func TestErrorBlockStatesRetryCount(t *testing.T) {
+	isolatedUsageHome(t)
+	m := newTestModel(100, 40)
+	m.lastRetries = 3
+	m.finishTurn(resultMsg{err: errors.New("provider returned 503 - service unavailable")})
+	if len(m.blocks) == 0 {
+		t.Fatal("expected an error block")
+	}
+	b := m.blocks[len(m.blocks)-1]
+	if b.kind != blockError {
+		t.Fatalf("expected error block, got %v", b.kind)
+	}
+	if !strings.Contains(b.content, "retried 3 times") {
+		t.Fatalf("error block should state the retry count, got %q", b.content)
 	}
 }
 
