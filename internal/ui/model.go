@@ -712,8 +712,21 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	// they scroll the transcript; a grown (multiline) composer keeps them for
 	// cursor movement instead.
 	case key == "up", key == "down":
-		if m.showCommands() || m.input.Height() > 1 {
-			return m, nil, false // palette navigation / multiline cursor keys
+		if m.showCommands() {
+			// Palette navigation: never let the arrows fall through to the
+			// textinput, they would be swallowed as no-ops.
+			items := m.filteredCommands()
+			if len(items) > 0 {
+				if key == "down" {
+					m.commandIndex = (m.commandIndex + 1) % len(items)
+				} else {
+					m.commandIndex = (m.commandIndex - 1 + len(items)) % len(items)
+				}
+			}
+			return m, nil, true
+		}
+		if m.input.Height() > 1 {
+			return m, nil, false // multiline cursor keys
 		}
 		if key == "up" {
 			m.scrollUp(3)
@@ -743,18 +756,22 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	case m.showCommands():
 		items := m.filteredCommands()
 		switch key {
-		case "tab", "down":
+		case "tab":
 			if len(items) > 0 {
 				m.commandIndex = (m.commandIndex + 1) % len(items)
 			}
 			return m, nil, true
-		case "shift+tab", "up":
+		case "shift+tab":
 			if len(items) > 0 {
 				m.commandIndex = (m.commandIndex - 1 + len(items)) % len(items)
 			}
 			return m, nil, true
 		case "enter":
 			if len(items) > 0 {
+				if m.commandIndex >= len(items) {
+					// Typing narrowed the list under a stale highlight.
+					m.commandIndex = 0
+				}
 				m.input.SetValue(items[m.commandIndex].name + " ")
 				m.commandIndex = 0
 			}

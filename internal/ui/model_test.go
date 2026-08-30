@@ -581,6 +581,52 @@ func TestArrowsStayInMultilineComposer(t *testing.T) {
 	}
 }
 
+// With the command palette open (input starts with "/"), up/down must cycle
+// the highlighted command instead of falling through to the textinput.
+func TestArrowKeysNavigateCommandPalette(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.input.SetValue("/mo")
+	items := m.filteredCommands()
+	if len(items) < 2 {
+		t.Fatalf("need >=2 matching commands for /mo, got %d", len(items))
+	}
+	if m.commandIndex != 0 {
+		t.Fatalf("commandIndex should start at 0, got %d", m.commandIndex)
+	}
+	_, _, handled := m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if !handled {
+		t.Fatalf("down with palette open must be handled, not dropped to the textinput")
+	}
+	if m.commandIndex != 1 {
+		t.Fatalf("down should highlight the next item, commandIndex=%d", m.commandIndex)
+	}
+	_, _, handled = m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if !handled {
+		t.Fatalf("up with palette open must be handled, not dropped to the textinput")
+	}
+	if m.commandIndex != 0 {
+		t.Fatalf("up should wrap back to the first item, commandIndex=%d", m.commandIndex)
+	}
+}
+
+// Narrowing the palette under a stale highlight must not crash enter.
+func TestEnterClampsStalePaletteIndex(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.input.SetValue("/")
+	m.commandIndex = 10 // deep highlight from the full list
+	m.input.SetValue("/mous") // filter narrows to a single command
+	if items := m.filteredCommands(); len(items) != 1 {
+		t.Fatalf("/mous should match exactly one command, got %d", len(items))
+	}
+	_, _, handled := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if !handled {
+		t.Fatal("enter with palette open must be handled")
+	}
+	if m.input.Value() != "/mouse " {
+		t.Fatalf("enter should complete the single match, input=%q", m.input.Value())
+	}
+}
+
 func TestCtrlYCopiesLastReplyWithToast(t *testing.T) {
 	m := newTestModel(100, 40)
 	m.toastTTL = 50 * time.Millisecond
