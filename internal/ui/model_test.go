@@ -831,6 +831,73 @@ func TestEffortCommandAndMenu(t *testing.T) {
 	}
 }
 
+// ctrl+r cycles the active model through the effort levels it exposes,
+// and back to none.
+func TestCtrlRCyclesEffort(t *testing.T) {
+	isolatedUsageHome(t)
+	m := newTestModel(100, 40)
+	m.cfg = config.Config{CurrentProvider: "t", CurrentModel: "claude-opus-5",
+		Providers: map[string]config.Provider{"t": {Type: "openai", BaseURL: "http://x.example/v1"}}}
+	m.agent = &agent.Agent{}
+
+	for _, want := range []string{"low", "medium", "high", ""} {
+		_, _, handled := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlR})
+		if !handled {
+			t.Fatal("ctrl+r must be handled")
+		}
+		if got := m.cfg.CurrentEffort(); got != want {
+			t.Fatalf("after cycle expected effort %q, got %q", want, got)
+		}
+	}
+}
+
+// A plain model has nothing to cycle; ctrl+r must not invent levels.
+func TestCtrlRRefusedForNonReasoningModel(t *testing.T) {
+	isolatedUsageHome(t)
+	m := newTestModel(100, 40)
+	m.cfg = config.Config{CurrentProvider: "t", CurrentModel: "llama3.1",
+		Providers: map[string]config.Provider{"t": {Type: "openai", BaseURL: "http://x.example/v1"}}}
+	m.agent = &agent.Agent{}
+	_, _, handled := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlR})
+	if !handled {
+		t.Fatal("ctrl+r must be handled even when refused")
+	}
+	if p := m.cfg.Providers["t"]; len(p.Efforts) != 0 {
+		t.Fatalf("no effort may be stored for a non-reasoning model, got %v", p.Efforts)
+	}
+	if !strings.Contains(m.toast, "does not expose an effort level") {
+		t.Fatalf("expected the refusal toast, got %q", m.toast)
+	}
+}
+
+// While the model is reasoning, the status line shows the live effort state
+// (off = provider default) for models that expose one.
+func TestStatusLineShowsEffortWhileThinking(t *testing.T) {
+	m := newTestModel(100, 40)
+	m.cfg = config.Config{CurrentProvider: "t", CurrentModel: "claude-opus-5", ContextWindow: 200000,
+		Providers: map[string]config.Provider{"t": {Type: "openai", BaseURL: "http://x.example/v1"}}}
+	m.busy = true
+	m.activity = "thinking"
+
+	row := m.statusRow()
+	if !strings.Contains(stripANSI(row), "effort:off") {
+		t.Fatalf("unset effort should show as off while thinking, row=%q", stripANSI(row))
+	}
+	p := m.cfg.Providers["t"]
+	p.Efforts = map[string]string{"claude-opus-5": "high"}
+	m.cfg.Providers["t"] = p
+	row = m.statusRow()
+	if !strings.Contains(stripANSI(row), "effort:high") {
+		t.Fatalf("set effort should show while thinking, row=%q", stripANSI(row))
+	}
+	// Non-reasoning model: no effort state at all.
+	m.cfg.CurrentModel = "llama3.1"
+	row = m.statusRow()
+	if strings.Contains(stripANSI(row), "effort:") {
+		t.Fatalf("non-reasoning model must not show an effort state, row=%q", stripANSI(row))
+	}
+}
+
 // A stopped local server must not clobber the stored list.
 func TestStartupKeepsStoredListWhenLocalServerDown(t *testing.T) {
 	isolatedUsageHome(t)

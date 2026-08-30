@@ -226,6 +226,7 @@ func (m *Model) command(s string) tea.Cmd {
 			rows = append(rows, fmt.Sprintf("%-11s %s", item.name, item.description))
 		}
 		keys := "enter send · ctrl+j newline · tab/shift+tab cycle modes · esc (twice) stop request\n" +
+			"ctrl+r cycle reasoning effort (off/low/medium/high) · /effort menu\n" +
 			"↑↓/pgup/pgdn scroll · drag to select text, release copies it\n" +
 			"click a message → revert/fork/copy menu · [ ] pick a message → y copy · f fork · r revert\n" +
 			"ctrl+y or /copy copy last reply\n" +
@@ -495,6 +496,9 @@ func (m *Model) openEffortMenu() {
 // setEffort stores a per-model effort level for the active provider and
 // persists it; "" clears back to the provider default.
 func (m *Model) setEffort(level string) {
+	if level == "none" {
+		level = ""
+	}
 	p := m.cfg.Providers[m.cfg.CurrentProvider]
 	if level == "" {
 		if p.Efforts != nil {
@@ -517,6 +521,26 @@ func (m *Model) setEffort(level string) {
 	} else {
 		m.notify("effort for " + m.cfg.CurrentModel + ": " + level)
 	}
+}
+
+// cycleEffort is the ctrl+r quick toggle: advance the active model's effort
+// to the next level it exposes (none → low → medium → high → none).
+func (m *Model) cycleEffort() {
+	model := m.cfg.CurrentModel
+	levels := agent.EffortLevels(model)
+	if len(levels) < 2 {
+		m.notify(model + " does not expose an effort level")
+		return
+	}
+	next := ""
+	current := m.cfg.CurrentEffort()
+	for i, l := range levels {
+		if l == current || (l == "none" && current == "") {
+			next = levels[(i+1)%len(levels)]
+			break
+		}
+	}
+	m.setEffort(next)
 }
 
 // settingsItems builds the /settings overlay. Provider credentials are

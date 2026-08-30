@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/SSNamahsos/Mihani-Code/internal/agent"
 	"github.com/SSNamahsos/Mihani-Code/internal/session"
 	"github.com/SSNamahsos/Mihani-Code/internal/usage"
 )
@@ -158,6 +159,15 @@ func (m *Model) statusRow() string {
 		label := m.activity
 		if label == "" {
 			label = "thinking"
+		}
+		// While the model is reasoning, surface the effort state (off =
+		// provider default) for models that actually expose one.
+		if label == "thinking" && len(agent.EffortLevels(m.cfg.CurrentModel)) > 1 {
+			if effort := m.cfg.CurrentEffort(); effort == "" {
+				label += " · effort:off"
+			} else {
+				label += " · effort:" + effort
+			}
 		}
 		left = lipgloss.NewStyle().Foreground(colAccent).
 			Render(fmt.Sprintf("%s %s", m.spinnerGlyph(), label))

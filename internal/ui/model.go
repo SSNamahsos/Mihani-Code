@@ -93,7 +93,7 @@ var commands = []commandItem{
 	{name: "/resume", description: "Resume a previous conversation"},
 	{name: "/seasons", description: "Switch between conversations in this folder"},
 	{name: "/copy", description: "Copy Mihani's last reply to the clipboard"},
-	{name: "/effort", description: "Set reasoning effort (low/medium/high) for the active model"},
+	{name: "/effort", description: "Set reasoning effort for the active model (ctrl+r cycles it)"},
 	{name: "/mode", description: "Switch between build, plan, research, and ask"},
 	{name: "/providers", description: "Show configured AI providers"},
 	{name: "/models", description: "Show models for the active provider"},
@@ -749,6 +749,12 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		if cmd := m.copyLastReply(); cmd != nil {
 			return m, cmd, true
 		}
+		return m, nil, true
+
+	case key == "ctrl+r":
+		// Quick reasoning-effort cycle for the active model (none → low →
+		// medium → high → none); applies from the next request onward.
+		m.cycleEffort()
 		return m, nil, true
 
 	case key == "ctrl+j", key == "alt+enter", key == "shift+enter":

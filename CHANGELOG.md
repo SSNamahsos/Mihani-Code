@@ -2,6 +2,15 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.15
+
+### Added
+- **Live effort state while the model is reasoning.** The status line now shows `thinking · effort:off` (provider default) or `thinking · effort:high` etc. for every model that exposes levels — non-reasoning models show no effort state at all.
+- **`ctrl+r` — quick effort toggle.** Cycles the active model through the levels it exposes (off → low → medium → high → off) without opening any menu; works while composing or mid-turn (applies from the next request onward), and refuses with a toast for models that have no effort levels. Documented in `/help`.
+
+### Notes
+- Effort support is detected from the model name family (same approach Claude Code and opencode take — OpenAI-compatible gateways expose no capability API). Effort levels are the real OpenAI `reasoning_effort` values; there is no "extra high" in the API, so the top level is `high`.
+
 ## v0.2.14
 
 ### Added
