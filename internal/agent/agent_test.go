@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -65,6 +66,104 @@ func TestOpenAIRequestNormalizesBaseURL(t *testing.T) {
 	}
 	if assistant["content"] != "hi" || len(calls) != 0 {
 		t.Fatalf("unexpected response: %#v calls=%d", assistant, len(calls))
+	}
+}
+
+// Retriable classifies which turn failures the reconnect loop should retry.
+func TestRetriableClassification(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{context.Canceled, false},
+		{&providerHTTPError{status: 401, message: "provider returned 401 Unauthorized"}, false},
+		{&providerHTTPError{status: 403, message: "provider returned 403"}, false},
+		{&providerHTTPError{status: 404, message: "provider returned 404"}, false},
+		{&providerHTTPError{status: 408, message: "provider returned 408"}, true},
+		{&providerHTTPError{status: 429, message: "provider returned 429"}, true},
+		{&providerHTTPError{status: 500, message: "provider returned 500"}, true},
+		{&providerHTTPError{status: 502, message: "provider returned 502"}, true},
+		{&providerHTTPError{status: 504, message: "provider returned 504"}, true},
+		{errors.New("connection refused"), true},
+		{errors.New("connection reset by peer"), true},
+	}
+	for i, c := range cases {
+		if got := Retriable(c.err); got != c.want {
+			t.Fatalf("case %d (%v): Retriable = %v, want %v", i, c.err, got, c.want)
+		}
+	}
+}
+
+func TestTrimHistoryDropsPartialTurn(t *testing.T) {
+	a := &Agent{}
+	for i := 0; i < 5; i++ {
+		a.history = append(a.history, map[string]any{"role": "user", "content": fmt.Sprint(i)})
+	}
+	a.TrimHistory(2)
+	if len(a.history) != 2 {
+		t.Fatalf("TrimHistory(2) kept %d entries", len(a.history))
+	}
+	a.TrimHistory(99) // must not grow
+	if len(a.history) != 2 {
+		t.Fatalf("TrimHistory above length must be a no-op, got %d", len(a.history))
+	}
+}
+
+// The per-model effort level must ride along as reasoning_effort, and be
+// absent entirely when unset (no fake parameter for default models).
+func TestEffortRidesInRequestBody(t *testing.T) {
+	var gotEffort any
+	var sawKey bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if e, ok := body["reasoning_effort"]; ok {
+			sawKey = true
+			gotEffort = e
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+	cfg := config.Config{CurrentProvider: "t", CurrentModel: "claude-opus-5",
+		Providers: map[string]config.Provider{"t": {Type: "openai", BaseURL: server.URL, Efforts: map[string]string{"claude-opus-5": "high"}}}}
+	a := Agent{Cfg: cfg, Root: t.TempDir(), Client: server.Client()}
+	if _, _, _, _, _, err := a.openAIRequest(context.Background(), cfg.Providers["t"], false, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+	if !sawKey || gotEffort != "high" {
+		t.Fatalf("reasoning_effort should be \"high\", sawKey=%v got=%v", sawKey, gotEffort)
+	}
+
+	p := cfg.Providers["t"]
+	p.Efforts = nil
+	cfg.Providers["t"] = p
+	a = Agent{Cfg: cfg, Root: t.TempDir(), Client: server.Client()}
+	sawKey = false
+	if _, _, _, _, _, err := a.openAIRequest(context.Background(), cfg.Providers["t"], false, func(Event) {}); err != nil {
+		t.Fatal(err)
+	}
+	if sawKey {
+		t.Fatal("no reasoning_effort parameter should be sent when effort is unset")
+	}
+}
+
+// EffortLevels is model-specific: reasoning families get the real levels,
+// plain models only "none".
+func TestEffortLevelsByModel(t *testing.T) {
+	for _, model := range []string{"claude-opus-5", "gpt-5.6-sol", "deepseek-r1", "openai/o3", "kimi-k3"} {
+		levels := EffortLevels(model)
+		if len(levels) != 4 || levels[0] != "none" || levels[3] != "high" {
+			t.Fatalf("%s should expose none/low/medium/high, got %v", model, levels)
+		}
+	}
+	for _, model := range []string{"llama3.1", "qwen2.5-coder", "SmolLM2-135M"} {
+		levels := EffortLevels(model)
+		if len(levels) != 1 || levels[0] != "none" {
+			t.Fatalf("%s should expose only none, got %v", model, levels)
+		}
 	}
 }
 

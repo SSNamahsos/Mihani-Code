@@ -2,6 +2,12 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.14
+
+### Added
+- **Automatic reconnect.** When a turn fails with a retriable provider error (network drop/timeout, HTTP 5xx, 429, 408), Mihani now retries with a growing backoff — 5s, 10s, 15s, then 30s and beyond — up to 10 attempts, showing progress in the status line like `reconnecting 3/10 · retry in 15s`. After the 10th failure the underlying error is shown in red. Non-retriable failures (bad key 401/403, bad request 400, user interrupt) fail immediately — a bad key is never retried ten times. Failed attempts are rolled back in history so the prompt is never sent twice.
+- **`/effort` — per-model reasoning effort.** `/effort` opens a menu of the levels the active model actually exposes (`none / low / medium / high` for reasoning models, only `none` for plain models — no fake options); `/effort high` sets it directly. The level is stored per model, sent to the provider as `reasoning_effort` (omitted entirely when unset), and shown next to the model name in the header, e.g. `Mihani Pro · claude-opus-5 · effort:high`.
+
 ## v0.2.13
 
 ### Fixed

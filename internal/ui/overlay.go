@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/SSNamahsos/Mihani-Code/internal/agent"
 	"github.com/SSNamahsos/Mihani-Code/internal/config"
 	"github.com/SSNamahsos/Mihani-Code/internal/gitx"
 	"github.com/SSNamahsos/Mihani-Code/internal/mcp"
@@ -84,6 +85,17 @@ func (m *Model) selectOverlayItem() {
 		if m.overlayIndex < len(provider.Models) {
 			m.cfg.CurrentModel = provider.Models[m.overlayIndex]
 			_ = m.cfg.Save()
+		}
+		m.closeOverlay()
+
+	case strings.HasPrefix(m.overlay, "Effort · "):
+		levels := agent.EffortLevels(m.cfg.CurrentModel)
+		if m.overlayIndex < len(levels) {
+			value := levels[m.overlayIndex]
+			if value == "none" {
+				value = ""
+			}
+			m.setEffort(value)
 		}
 		m.closeOverlay()
 
@@ -404,6 +416,32 @@ func (m *Model) command(s string) tea.Cmd {
 	case "/connect":
 		m.openConnect()
 
+	case "/effort":
+		model := m.cfg.CurrentModel
+		levels := agent.EffortLevels(model)
+		if len(fields) > 1 {
+			value := strings.ToLower(strings.TrimSpace(fields[1]))
+			if value == "off" || value == "default" {
+				value = "none"
+			}
+			allowed := false
+			for _, l := range levels {
+				if l == value {
+					allowed = true
+				}
+			}
+			if !allowed {
+				m.appendBlock(&block{kind: blockError, content: fmt.Sprintf("%s supports: %s", model, strings.Join(levels, ", "))})
+				return nil
+			}
+			if value == "none" {
+				value = ""
+			}
+			m.setEffort(value)
+			return nil
+		}
+		m.openEffortMenu()
+
 	case "/refresh":
 		targets := []string{}
 		for _, name := range sortedProviderNames(m.cfg) {
@@ -426,6 +464,59 @@ func (m *Model) command(s string) tea.Cmd {
 		m.appendBlock(&block{kind: blockError, content: "unknown command: " + fields[0] + " - try /help"})
 	}
 	return nil
+}
+
+// openEffortMenu shows the reasoning-effort levels the active model actually
+// exposes — a non-reasoning model only gets "none", never fake options.
+func (m *Model) openEffortMenu() {
+	model := m.cfg.CurrentModel
+	levels := agent.EffortLevels(model)
+	current := m.cfg.CurrentEffort()
+	items := make([]overlayItem, 0, len(levels))
+	for _, level := range levels {
+		mark := " "
+		if level == current {
+			mark = "●"
+		}
+		detail := "provider default — no effort parameter sent"
+		switch level {
+		case "low":
+			detail = "fastest, shallowest reasoning"
+		case "medium":
+			detail = "balanced reasoning"
+		case "high":
+			detail = "full reasoning effort"
+		}
+		items = append(items, overlayItem{label: mark + " " + level, detail: detail})
+	}
+	m.openOverlay("Effort · "+model, items)
+}
+
+// setEffort stores a per-model effort level for the active provider and
+// persists it; "" clears back to the provider default.
+func (m *Model) setEffort(level string) {
+	p := m.cfg.Providers[m.cfg.CurrentProvider]
+	if level == "" {
+		if p.Efforts != nil {
+			delete(p.Efforts, m.cfg.CurrentModel)
+		}
+	} else {
+		if p.Efforts == nil {
+			p.Efforts = map[string]string{}
+		}
+		p.Efforts[m.cfg.CurrentModel] = level
+	}
+	m.cfg.Providers[m.cfg.CurrentProvider] = p
+	if err := m.cfg.Save(); err != nil {
+		m.notify("Could not save: " + err.Error())
+		return
+	}
+	m.agent.Cfg = m.cfg
+	if level == "" {
+		m.notify("effort for " + m.cfg.CurrentModel + ": none (provider default)")
+	} else {
+		m.notify("effort for " + m.cfg.CurrentModel + ": " + level)
+	}
 }
 
 // settingsItems builds the /settings overlay. Provider credentials are

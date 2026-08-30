@@ -118,8 +118,11 @@ func (m *Model) View() string {
 func (m *Model) headerRow() string {
 	logo := lipgloss.NewStyle().Bold(true).Foreground(colAccent).Render("◆ mihani")
 	version := lipgloss.NewStyle().Foreground(colFaint).Render(" " + m.version)
-	model := lipgloss.NewStyle().Foreground(colDim).
-		Render(fmt.Sprintf("%s · %s", m.cfg.ProviderLabel(), m.cfg.CurrentModel))
+	modelLabel := fmt.Sprintf("%s · %s", m.cfg.ProviderLabel(), m.cfg.CurrentModel)
+	if effort := m.cfg.CurrentEffort(); effort != "" {
+		modelLabel += " · effort:" + effort
+	}
+	model := lipgloss.NewStyle().Foreground(colDim).Render(modelLabel)
 	mode := currentMode(m.modeIndex)
 	pill := lipgloss.NewStyle().Bold(true).
 		Background(mode.color).

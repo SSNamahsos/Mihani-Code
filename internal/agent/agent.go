@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -57,6 +58,17 @@ func (a *Agent) Reset()                           { a.history = nil; a.tokens = 
 func (a *Agent) History() []map[string]any        { return a.history }
 func (a *Agent) Restore(history []map[string]any) { a.history = history }
 func (a *Agent) Tokens() int                      { return a.tokens }
+
+// TrimHistory reverts the stored conversation to n entries, dropping the
+// partial work of a failed turn so a retry re-sends the prompt cleanly.
+func (a *Agent) TrimHistory(n int) {
+	if n < 0 {
+		n = 0
+	}
+	if n < len(a.history) {
+		a.history = a.history[:n]
+	}
+}
 
 func (a *Agent) iterations() int {
 	if a.MaxIterations > 0 {
@@ -129,6 +141,9 @@ func (a *Agent) openAIRequest(ctx context.Context, p config.Provider, useTools b
 		"stream":         true,
 		"messages":       a.history,
 		"stream_options": map[string]any{"include_usage": true},
+	}
+	if effort := a.Cfg.CurrentEffort(); effort != "" {
+		body["reasoning_effort"] = effort
 	}
 	if useTools {
 		body["tools"] = a.openAITools()
@@ -635,6 +650,34 @@ func (a *Agent) Close() {
 	a.mcp = nil
 }
 
+// providerHTTPError wraps a non-2xx provider response so the UI can tell a
+// retriable server failure (5xx/429/408) from an instant one (bad key, bad
+// request) without parsing error strings.
+type providerHTTPError struct {
+	status  int
+	message string
+}
+
+func (e *providerHTTPError) Error() string { return e.message }
+
+// Retriable reports whether a failed turn is worth retrying. Transport
+// failures (connection refused, timeout, reset) and server-side responses
+// are; user cancellation and client errors (4xx: auth, model, payload) are
+// not — retrying those just repeats the same failure ten times.
+func Retriable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var httpErr *providerHTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.status == 408 || httpErr.status == 429 || httpErr.status >= 500
+	}
+	return true
+}
+
 func providerError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	var payload struct {
@@ -648,13 +691,13 @@ func providerError(resp *http.Response) error {
 		if label != "" {
 			label += ": "
 		}
-		return fmt.Errorf("provider returned %s — %s%s", resp.Status, label, payload.Error.Message)
+		return &providerHTTPError{status: resp.StatusCode, message: fmt.Sprintf("provider returned %s — %s%s", resp.Status, label, payload.Error.Message)}
 	}
 	excerpt := strings.TrimSpace(string(body))
 	if excerpt == "" {
-		return fmt.Errorf("provider returned %s", resp.Status)
+		return &providerHTTPError{status: resp.StatusCode, message: fmt.Sprintf("provider returned %s", resp.Status)}
 	}
-	return fmt.Errorf("provider returned %s — %s", resp.Status, clip(excerpt, 300))
+	return &providerHTTPError{status: resp.StatusCode, message: fmt.Sprintf("provider returned %s — %s", resp.Status, clip(excerpt, 300))}
 }
 
 func estimateTokens(s string) int {
@@ -671,6 +714,38 @@ func clip(s string, n int) string {
 		return s
 	}
 	return tools.Truncate(s, n) + "\n…[truncated]"
+}
+
+// EffortLevels lists the reasoning-effort levels a model actually exposes.
+// Plain non-reasoning models get only "none": offering levels they cannot
+// use would be a fake knob.
+func EffortLevels(model string) []string {
+	if supportsEffort(model) {
+		return []string{"none", "low", "medium", "high"}
+	}
+	return []string{"none"}
+}
+
+// supportsEffort recognizes current-generation reasoning model families by
+// name prefix (any provider prefix before "/" is ignored).
+func supportsEffort(model string) bool {
+	m := strings.ToLower(model)
+	if i := strings.LastIndex(m, "/"); i >= 0 {
+		m = m[i+1:]
+	}
+	for _, prefix := range []string{
+		"gpt-5", "o1", "o3", "o4", "o5", "o-",
+		"deepseek-r1", "r1",
+		"claude", "grok-4", "kimi-k",
+		"glm-4.6", "glm-4.7", "glm-5",
+		"minimax-m2", "minimax-m3",
+		"qwen3", "qwq", "mimo-v", "kat-coder",
+	} {
+		if strings.HasPrefix(m, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 var modeGuidance = map[string]string{

@@ -702,6 +702,135 @@ func TestStartupPullsRealModelsForLocalProvider(t *testing.T) {
 	}
 }
 
+// Regression: retriable provider failures (network/5xx/429) must be retried
+// with the backoff ladder until the turn succeeds; the prompt must not be
+// duplicated in history by the failed attempts.
+func TestTurnRetriesRetriableFailures(t *testing.T) {
+	isolatedUsageHome(t)
+	orig := turnBackoffs
+	turnBackoffs = []time.Duration{10 * time.Millisecond, 10 * time.Millisecond, 10 * time.Millisecond, 10 * time.Millisecond}
+	defer func() { turnBackoffs = orig }()
+
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls <= 2 {
+			w.WriteHeader(502)
+			_, _ = w.Write([]byte(`{"error":{"message":"bad gateway"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	m := newTestModel(100, 40)
+	m.cfg = config.Config{CurrentProvider: "t", CurrentModel: "m", MaxTokens: 64,
+		Providers: map[string]config.Provider{"t": {Type: "openai", BaseURL: server.URL + "/v1"}}}
+	m.agent = &agent.Agent{Cfg: m.cfg, Client: server.Client()}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := m.runTurn(ctx, "hello", "build", func(string, map[string]any) bool { return true }, func(agent.Event) {})
+	if err != nil {
+		t.Fatalf("turn should succeed after retries, got %v", err)
+	}
+	if calls != 3 {
+		t.Fatalf("expected 2 failures + 1 success, got %d calls", calls)
+	}
+	if !strings.Contains(m.activity, "reconnecting 3/10") {
+		t.Fatalf("status should show reconnect progress, got %q", m.activity)
+	}
+	if got := len(m.agent.History()); got != 3 {
+		t.Fatalf("history should hold system+user+assistant exactly once, got %d entries", got)
+	}
+}
+
+// Non-retriable failures (auth) must fail fast — no ten-fold retry of a bad key.
+func TestTurnDoesNotRetryAuthFailures(t *testing.T) {
+	isolatedUsageHome(t)
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(401)
+		_, _ = w.Write([]byte(`{"error":{"message":"Invalid token"}}`))
+	}))
+	defer server.Close()
+
+	m := newTestModel(100, 40)
+	m.cfg = config.Config{CurrentProvider: "t", CurrentModel: "m", MaxTokens: 64,
+		Providers: map[string]config.Provider{"t": {Type: "openai", BaseURL: server.URL + "/v1"}}}
+	m.agent = &agent.Agent{Cfg: m.cfg, Client: server.Client()}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := m.runTurn(ctx, "hello", "build", func(string, map[string]any) bool { return true }, func(agent.Event) {})
+	if err == nil {
+		t.Fatal("auth failure must surface as an error")
+	}
+	if calls != 1 {
+		t.Fatalf("401 must not be retried, got %d calls", calls)
+	}
+}
+
+// /effort stores a per-model level, rejects levels the model does not expose,
+// and the menu honors the same rules.
+func TestEffortCommandAndMenu(t *testing.T) {
+	isolatedUsageHome(t)
+	m := newTestModel(100, 40)
+	m.cfg = config.Config{CurrentProvider: "t", CurrentModel: "claude-opus-5",
+		Providers: map[string]config.Provider{"t": {Type: "openai", BaseURL: "http://x.example/v1"}}}
+	m.agent = &agent.Agent{}
+
+	if cmd := m.command("/effort high"); cmd != nil {
+		t.Fatal("/effort high should not return a follow-up cmd")
+	}
+	if got := m.cfg.Providers["t"].Efforts["claude-opus-5"]; got != "high" {
+		t.Fatalf("effort should be stored per model, got %q", got)
+	}
+	if m.cfg.CurrentEffort() != "high" {
+		t.Fatalf("CurrentEffort should resolve the active model, got %q", m.cfg.CurrentEffort())
+	}
+	// Survives a reload.
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Providers["t"].Efforts["claude-opus-5"]; got != "high" {
+		t.Fatalf("effort lost after save+load: %q", got)
+	}
+
+	// A level the model cannot use must be rejected, not silently stored.
+	m.cfg.CurrentModel = "llama3.1"
+	m.command("/effort high")
+	last := m.blocks[len(m.blocks)-1]
+	if last.kind != blockError {
+		t.Fatalf("unsupported level should raise an error block, got %q", last.content)
+	}
+
+	// The menu lists only the levels the model exposes; selecting stores it.
+	m.command("/effort")
+	if !strings.HasPrefix(m.overlay, "Effort · ") {
+		t.Fatalf("/effort should open the effort menu, overlay=%q", m.overlay)
+	}
+	if len(m.overlayItems) != 1 || m.overlayItems[0].label != "  none" {
+		t.Fatalf("non-reasoning model menu should hold only none, got %v", m.overlayItems)
+	}
+	m.cfg.CurrentModel = "gpt-5.6-sol"
+	m.openEffortMenu()
+	if len(m.overlayItems) != 4 {
+		t.Fatalf("reasoning model menu should hold four levels, got %v", m.overlayItems)
+	}
+	m.overlayIndex = 3 // high
+	m.selectOverlayItem()
+	if got := m.cfg.Providers["t"].Efforts["gpt-5.6-sol"]; got != "high" {
+		t.Fatalf("menu selection should store the level, got %q", got)
+	}
+	// The other model keeps its own level.
+	if got := m.cfg.Providers["t"].Efforts["claude-opus-5"]; got != "high" {
+		t.Fatalf("per-model effort of other models must be untouched, got %q", got)
+	}
+}
+
 // A stopped local server must not clobber the stored list.
 func TestStartupKeepsStoredListWhenLocalServerDown(t *testing.T) {
 	isolatedUsageHome(t)

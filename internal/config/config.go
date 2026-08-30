@@ -27,6 +27,9 @@ type Provider struct {
 	// automatically falls back to it when the shared embedded-key budget is
 	// exhausted. Stored locally in config.json by explicit user action.
 	PersonalKey string `json:"personal_key,omitempty"`
+	// Efforts maps model name -> reasoning-effort level (low/medium/high)
+	// set via /effort. Empty/absent = provider default.
+	Efforts map[string]string `json:"efforts,omitempty"`
 }
 
 // MaskedKey renders a short non-revealing fingerprint of a secret.
@@ -278,6 +281,16 @@ func isLegacyID(name string) bool {
 		}
 	}
 	return false
+}
+
+// CurrentEffort returns the reasoning-effort level set for the active model
+// ("" = provider default).
+func (c Config) CurrentEffort() string {
+	p, ok := c.Providers[c.CurrentProvider]
+	if !ok || p.Efforts == nil {
+		return ""
+	}
+	return p.Efforts[c.CurrentModel]
 }
 
 func (c Config) Key(name string) string {

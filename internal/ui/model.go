@@ -93,6 +93,7 @@ var commands = []commandItem{
 	{name: "/resume", description: "Resume a previous conversation"},
 	{name: "/seasons", description: "Switch between conversations in this folder"},
 	{name: "/copy", description: "Copy Mihani's last reply to the clipboard"},
+	{name: "/effort", description: "Set reasoning effort (low/medium/high) for the active model"},
 	{name: "/mode", description: "Switch between build, plan, research, and ask"},
 	{name: "/providers", description: "Show configured AI providers"},
 	{name: "/models", description: "Show models for the active provider"},
@@ -1209,35 +1210,77 @@ func (m *Model) startTurn(prompt string) tea.Cmd {
 	a := m.agent
 	a.Cfg = cfg
 	a.Root = m.root
+	approve := func(name string, input map[string]any) bool {
+		if m.approveAll || cfg.AutoConfirm {
+			return true
+		}
+		if modeName == "plan" || modeName == "research" || modeName == "ask" {
+			switch name {
+			case "write_file", "edit_file", "delete_file", "bash":
+				m.program.Send(eventMsg(agent.Event{
+					Kind: "activity",
+					Text: modeName + " mode blocked " + name,
+				}))
+				return false
+			}
+		}
+		approval := make(chan bool, 1)
+		if m.program != nil {
+			m.program.Send(eventMsg(agent.Event{Kind: "permission", Tool: name, Input: input, Approval: approval}))
+		}
+		return <-approval
+	}
+	emit := func(ev agent.Event) {
+		if m.program != nil {
+			m.program.Send(eventMsg(ev))
+		}
+	}
 	return tea.Sequence(tick(), func() tea.Msg {
-		err := a.Send(ctx, prompt, modeName,
-			func(name string, input map[string]any) bool {
-				if m.approveAll || cfg.AutoConfirm {
-					return true
-				}
-				if modeName == "plan" || modeName == "research" || modeName == "ask" {
-					switch name {
-					case "write_file", "edit_file", "delete_file", "bash":
-						m.program.Send(eventMsg(agent.Event{
-							Kind: "activity",
-							Text: modeName + " mode blocked " + name,
-						}))
-						return false
-					}
-				}
-				approval := make(chan bool, 1)
-				if m.program != nil {
-					m.program.Send(eventMsg(agent.Event{Kind: "permission", Tool: name, Input: input, Approval: approval}))
-				}
-				return <-approval
-			},
-			func(ev agent.Event) {
-				if m.program != nil {
-					m.program.Send(eventMsg(ev))
-				}
-			})
-		return resultMsg{err}
+		return resultMsg{m.runTurn(ctx, prompt, modeName, approve, emit)}
 	})
+}
+
+// maxTurnAttempts caps the automatic reconnect loop for one turn.
+const maxTurnAttempts = 10
+
+// turnBackoffs waits before each retry: 5s, 10s, 15s, then 30s and beyond
+// (the last value repeats). Overridable in tests.
+var turnBackoffs = []time.Duration{5 * time.Second, 10 * time.Second, 15 * time.Second, 30 * time.Second}
+
+// runTurn executes a turn with automatic reconnect. Retriable provider
+// failures (network errors, 5xx/429/408) are retried up to maxTurnAttempts
+// with a growing backoff, the status line showing progress like
+// "reconnecting 3/10 · retry in 15s". Non-retriable failures (bad key, bad
+// request) and user interrupts return immediately; the final failure
+// surfaces as a red error block in finishTurn.
+func (m *Model) runTurn(ctx context.Context, prompt, modeName string, approve func(string, map[string]any) bool, emit func(agent.Event)) error {
+	a := m.agent
+	before := len(a.History())
+	var lastErr error
+	for attempt := 1; attempt <= maxTurnAttempts; attempt++ {
+		if attempt > 1 {
+			delay := turnBackoffs[minInt(attempt-2, len(turnBackoffs)-1)]
+			m.activity = fmt.Sprintf("reconnecting %d/%d · retry in %ds", attempt, maxTurnAttempts, int(delay.Seconds()))
+			m.status = m.activity
+			m.refreshView()
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			// Drop the partial history the failed attempt left behind so the
+			// prompt is not sent twice.
+			a.TrimHistory(before)
+		}
+		lastErr = a.Send(ctx, prompt, modeName, approve, emit)
+		if lastErr == nil {
+			return nil
+		}
+		if ctx.Err() != nil || !agent.Retriable(lastErr) {
+			return lastErr
+		}
+	}
+	return lastErr
 }
 
 func (m *Model) finishTurn(x resultMsg) tea.Cmd {
