@@ -9,15 +9,23 @@ import (
 	"github.com/SSNamahsos/Mihani-Code/internal/config"
 )
 
+// NormalizeBaseURL canonicalizes an OpenAI-compatible base URL so the same
+// value works for both model discovery and chat requests. Gateways expose
+// their API under /v1 (or /api/v1); users commonly paste the bare domain.
+func NormalizeBaseURL(base string) string {
+	base = strings.TrimRight(base, "/")
+	if base != "" && !strings.HasSuffix(base, "/v1") && !strings.HasSuffix(base, "/api/v1") {
+		base += "/v1"
+	}
+	return base
+}
+
 // DiscoverModels supports OpenAI-compatible /models endpoints and returns IDs only.
 func DiscoverModels(client *http.Client, baseURL, apiKey string) ([]string, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	baseURL = strings.TrimRight(baseURL, "/")
-	if !strings.HasSuffix(baseURL, "/v1") && !strings.HasSuffix(baseURL, "/api/v1") {
-		baseURL += "/v1"
-	}
+	baseURL = NormalizeBaseURL(baseURL)
 	req, err := http.NewRequest(http.MethodGet, baseURL+"/models", nil)
 	if err != nil {
 		return nil, err
@@ -54,7 +62,7 @@ func NormalizeProvider(name, baseURL, apiKey string, models []string) config.Pro
 	return config.Provider{
 		Label:       name,
 		Type:        "openai",
-		BaseURL:     strings.TrimRight(baseURL, "/"),
+		BaseURL:     NormalizeBaseURL(baseURL),
 		APIKey:      apiKey,
 		Models:      models,
 		NativeTools: config.NativeToolsDefault(baseURL),

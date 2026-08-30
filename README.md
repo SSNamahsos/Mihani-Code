@@ -226,7 +226,7 @@ Keep the repository public so the install one-liners and release downloads are r
 
 ## Configuration
 
-The config file lives at `~/.mihani/config.json` after your first change and supports extra fields such as `context_window`, `max_iterations`, `budget_usd`, and `pricing`. Built-in provider credentials cannot be stored in or read from this file; custom providers added via `/connect` should reference an environment variable through `env_key` if they need a secret at startup.
+The config file lives at `~/.mihani/config.json` after your first change and supports extra fields such as `context_window`, `max_iterations`, `budget_usd`, and `pricing`. Built-in provider credentials cannot be stored in or read from this file; custom providers added via `/connect` store their key locally in the provider's `personal_key` field (used for that endpoint's requests), or reference an environment variable through `env_key` if they prefer.
 
 ## Skills and MCP
 

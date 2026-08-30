@@ -80,6 +80,11 @@ var legacyBuiltinIDs = map[string]string{
 	"seekai": BuiltinSecondary,
 }
 
+// legacyRemovedIDs are provider ids shipped in earlier releases that no
+// longer exist. They are dropped on load so old configs and overlays never
+// show dead endpoints again.
+var legacyRemovedIDs = []string{"openai", "openrouter", "anthropic"}
+
 func defaults() Config {
 	return Config{
 		Version:         2,
@@ -163,6 +168,9 @@ func migrateBuiltins(c *Config) {
 	for legacy := range legacyBuiltinIDs {
 		delete(c.Providers, legacy)
 	}
+	for _, id := range legacyRemovedIDs {
+		delete(c.Providers, id)
+	}
 	if replacement, ok := legacyBuiltinIDs[c.CurrentProvider]; ok {
 		c.CurrentProvider = replacement
 		if p := c.Providers[replacement]; len(p.Models) > 0 && !containsModel(p.Models, c.CurrentModel) {
@@ -235,9 +243,13 @@ func (c Config) Key(name string) string {
 		return p.APIKey
 	}
 	if p.EnvKey != "" {
-		return os.Getenv(p.EnvKey)
+		if key := os.Getenv(p.EnvKey); key != "" {
+			return key
+		}
 	}
-	return ""
+	// User-added providers keep their /connect key in PersonalKey (the only
+	// key field that survives a save); it is their primary credential.
+	return p.PersonalKey
 }
 
 // Budget returns the effective daily USD budget (<=0 disables enforcement).

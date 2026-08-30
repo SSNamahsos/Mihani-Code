@@ -216,3 +216,57 @@ func TestBudgetEnforcedOnlyForBuiltins(t *testing.T) {
 		t.Fatalf("custom provider should have no cap, got %v", got)
 	}
 }
+
+// The /connect key is the user's own credential: it must resolve as the
+// provider's key after a save+load cycle (APIKey is runtime-only).
+func TestKeyFallsBackToPersonalKey(t *testing.T) {
+	cfg := defaults()
+	cfg.Providers["custom"] = Provider{Label: "Custom", Type: "openai", BaseURL: "http://x.example/v1", PersonalKey: "sk-persisted-123456"}
+	if got := cfg.Key("custom"); got != "sk-persisted-123456" {
+		t.Fatalf("Key should fall back to the persisted personal key, got %q", got)
+	}
+	custom := cfg.Providers["custom"]
+	custom.EnvKey = "MIHANI_TEST_KEY"
+	cfg.Providers["custom"] = custom
+	t.Setenv("MIHANI_TEST_KEY", "sk-from-env")
+	if got := cfg.Key("custom"); got != "sk-from-env" {
+		t.Fatalf("env key should win over the personal key, got %q", got)
+	}
+	// An env var that is unset must not shadow the personal key.
+	custom.EnvKey = "MIHANI_TEST_KEY_UNSET"
+	cfg.Providers["custom"] = custom
+	if got := cfg.Key("custom"); got != "sk-persisted-123456" {
+		t.Fatalf("unset env var should fall through to the personal key, got %q", got)
+	}
+	custom.APIKey = "sk-runtime"
+	cfg.Providers["custom"] = custom
+	if got := cfg.Key("custom"); got != "sk-runtime" {
+		t.Fatalf("runtime key should win, got %q", got)
+	}
+}
+
+// Older releases shipped openai/openrouter/anthropic built-ins. They must
+// disappear on load, and a selection pointing at them falls back cleanly.
+func TestMigrateDropsRemovedLegacyProviders(t *testing.T) {
+	isolatedHome(t)
+	cfg := defaults()
+	cfg.Providers["openai"] = Provider{Label: "OpenAI", Type: "openai", BaseURL: "https://api.openai.com/v1"}
+	cfg.Providers["openrouter"] = Provider{Label: "OpenRouter", Type: "openai", BaseURL: "https://openrouter.ai/api/v1"}
+	cfg.Providers["anthropic"] = Provider{Label: "Anthropic", Type: "anthropic"}
+	cfg.CurrentProvider = "openrouter"
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"openai", "openrouter", "anthropic"} {
+		if _, ok := loaded.Providers[id]; ok {
+			t.Fatalf("legacy provider %s should have been dropped on load", id)
+		}
+	}
+	if loaded.CurrentProvider != BuiltinPrimary {
+		t.Fatalf("selection on a removed provider should fall back to the builtin, got %s", loaded.CurrentProvider)
+	}
+}

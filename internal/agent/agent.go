@@ -18,6 +18,7 @@ import (
 	"github.com/SSNamahsos/Mihani-Code/internal/gitx"
 	"github.com/SSNamahsos/Mihani-Code/internal/mcp"
 	"github.com/SSNamahsos/Mihani-Code/internal/pricing"
+	"github.com/SSNamahsos/Mihani-Code/internal/providers"
 	"github.com/SSNamahsos/Mihani-Code/internal/secrets"
 	"github.com/SSNamahsos/Mihani-Code/internal/skills"
 	"github.com/SSNamahsos/Mihani-Code/internal/tools"
@@ -136,7 +137,7 @@ func (a *Agent) openAIRequest(ctx context.Context, p config.Provider, useTools b
 	if err != nil {
 		return nil, nil, 0, 0, 0, err
 	}
-	base := strings.TrimRight(p.BaseURL, "/")
+	base := providers.NormalizeBaseURL(p.BaseURL)
 	if base == "" {
 		base = "https://api.openai.com/v1"
 	}
@@ -155,6 +156,12 @@ func (a *Agent) openAIRequest(ctx context.Context, p config.Provider, useTools b
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		return nil, nil, 0, 0, 0, providerError(resp)
+	}
+	// Gateways whose base URL is missing the API prefix answer chat requests
+	// with their web app (200 + HTML) instead of a JSON stream. Failing loudly
+	// beats a silent empty reply that looks like a cancelled turn.
+	if ct := resp.Header.Get("Content-Type"); strings.Contains(ct, "text/html") {
+		return nil, nil, 0, 0, 0, fmt.Errorf("provider answered with a web page instead of a model stream — check the base URL for %s (it should point at the API, usually ending in /v1)", a.Cfg.CurrentProvider)
 	}
 	var content strings.Builder
 	calls := map[int]*toolCallState{}

@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 	"net/http"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 
 	"github.com/SSNamahsos/Mihani-Code/internal/config"
 	"github.com/SSNamahsos/Mihani-Code/internal/providers"
+	"github.com/SSNamahsos/Mihani-Code/internal/secrets"
 )
 
 var connectPlaceholders = [3]string{
@@ -123,6 +126,12 @@ func (m *Model) finishConnect(x modelsMsg) tea.Cmd {
 	}
 	name := m.connectName
 	provider := providers.NormalizeProvider(name, m.connectURL, m.connectFields[2], x.models)
+	if key := strings.TrimSpace(m.connectFields[2]); key != "" {
+		// The runtime APIKey field is never persisted; the only key field that
+		// survives a save is PersonalKey, which Key() falls back to.
+		provider.PersonalKey = key
+		secrets.Register(key)
+	}
 	if m.cfg.Providers == nil {
 		m.cfg.Providers = map[string]config.Provider{}
 	}
@@ -144,6 +153,113 @@ func (m *Model) finishConnect(x modelsMsg) tea.Cmd {
 	}
 	m.relayout()
 	return nil
+}
+
+// refreshResult carries one provider's re-discovery outcome.
+type refreshResult struct {
+	models []string
+	err    string
+}
+
+type refreshMsg struct {
+	results map[string]refreshResult
+}
+
+// refreshProvidersCmd re-discovers models for user-added providers in the
+// background and reports back over refreshMsg.
+func (m *Model) refreshProvidersCmd(targets []string) tea.Cmd {
+	return func() tea.Msg {
+		client := &http.Client{Timeout: 15 * time.Second}
+		results := make(map[string]refreshResult, len(targets))
+		for _, name := range targets {
+			p := m.cfg.Providers[name]
+			models, err := providers.DiscoverModels(client, p.BaseURL, m.cfg.Key(name))
+			if err != nil {
+				results[name] = refreshResult{err: err.Error()}
+				continue
+			}
+			results[name] = refreshResult{models: models}
+		}
+		return refreshMsg{results: results}
+	}
+}
+
+// finishRefresh applies refreshed model lists, persists them, and reports.
+func (m *Model) finishRefresh(x refreshMsg) tea.Cmd {
+	names := make([]string, 0, len(x.results))
+	for name := range x.results {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	lines := []string{}
+	for _, name := range names {
+		res := x.results[name]
+		if res.err != "" {
+			lines = append(lines, fmt.Sprintf("%s: %s", name, res.err))
+			continue
+		}
+		p := m.cfg.Providers[name]
+		p.Models = res.models
+		m.cfg.Providers[name] = p
+		switch {
+		case len(res.models) == 0:
+			lines = append(lines, name+": endpoint listed no models")
+		default:
+			lines = append(lines, fmt.Sprintf("%s: %d models", name, len(res.models)))
+		}
+		if name == m.cfg.CurrentProvider && len(res.models) > 0 && !modelInList(res.models, m.cfg.CurrentModel) {
+			m.cfg.CurrentModel = res.models[0]
+			lines = append(lines, "active model reset to "+res.models[0])
+		}
+	}
+	if err := m.cfg.Save(); err != nil {
+		m.appendBlock(&block{kind: blockError, content: "refreshed but could not save config: " + err.Error()})
+		return nil
+	}
+	m.agent.Cfg = m.cfg
+	m.appendBlock(&block{kind: blockInfo, content: "model refresh\n" + strings.Join(lines, "\n")})
+	m.relayout()
+	return nil
+}
+
+func modelInList(models []string, model string) bool {
+	for _, m := range models {
+		if m == model {
+			return true
+		}
+	}
+	return false
+}
+
+// refreshLocalProviderModels re-fetches the active provider's model list when
+// its endpoint is local (ollama etc.), so the app shows the models actually
+// installed instead of a stale stored list. Remote providers keep their list;
+// a stopped local server keeps the stored list.
+func (m *Model) refreshLocalProviderModels() {
+	p, ok := m.cfg.Providers[m.cfg.CurrentProvider]
+	if !ok || p.BaseURL == "" {
+		return
+	}
+	u, err := url.Parse(p.BaseURL)
+	if err != nil {
+		return
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+	default:
+		return
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	models, err := providers.DiscoverModels(client, p.BaseURL, m.cfg.Key(m.cfg.CurrentProvider))
+	if err != nil || len(models) == 0 {
+		return
+	}
+	p.Models = models
+	m.cfg.Providers[m.cfg.CurrentProvider] = p
+	if !modelInList(models, m.cfg.CurrentModel) {
+		m.cfg.CurrentModel = models[0]
+	}
+	_ = m.cfg.Save()
 }
 
 func (m *Model) connectView() string {

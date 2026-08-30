@@ -42,6 +42,48 @@ func TestOpenAIStreamCompletesAndKeepsHistory(t *testing.T) {
 	}
 }
 
+// Regression: a base URL pasted without its /v1 suffix must still reach the
+// API path. Gateways answer the bare path with their web app, which used to
+// surface as a silent empty ("cancelled") reply.
+func TestOpenAIRequestNormalizesBaseURL(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+	cfg := config.Config{CurrentProvider: "test", CurrentModel: "test-model", Providers: map[string]config.Provider{"test": {Type: "openai", BaseURL: server.URL}}}
+	a := Agent{Cfg: cfg, Root: t.TempDir(), Client: server.Client()}
+	assistant, calls, _, _, _, err := a.openAIRequest(context.Background(), cfg.Providers["test"], false, func(Event) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Fatalf("request should hit the /v1 API path, got %s", gotPath)
+	}
+	if assistant["content"] != "hi" || len(calls) != 0 {
+		t.Fatalf("unexpected response: %#v calls=%d", assistant, len(calls))
+	}
+}
+
+// A 200 response that is the gateway's HTML web app (missing /v1) must fail
+// loudly instead of producing a silent empty reply.
+func TestOpenAIRequestRejectsHTMLResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<!doctype html><html><body>gateway web app</body></html>"))
+	}))
+	defer server.Close()
+	cfg := config.Config{CurrentProvider: "test", CurrentModel: "test-model", Providers: map[string]config.Provider{"test": {Type: "openai", BaseURL: server.URL + "/v1"}}}
+	a := Agent{Cfg: cfg, Root: t.TempDir(), Client: server.Client()}
+	_, _, _, _, _, err := a.openAIRequest(context.Background(), cfg.Providers["test"], false, func(Event) {})
+	if err == nil || !strings.Contains(err.Error(), "web page") {
+		t.Fatalf("HTML response must surface as an explicit base-URL error, got %v", err)
+	}
+}
+
 // Regression: streamed parallel tool calls must be reassembled in index order.
 func TestOpenAIToolCallsPreserveStreamOrder(t *testing.T) {
 	var requests int

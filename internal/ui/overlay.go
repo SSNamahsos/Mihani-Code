@@ -404,6 +404,20 @@ func (m *Model) command(s string) tea.Cmd {
 	case "/connect":
 		m.openConnect()
 
+	case "/refresh":
+		targets := []string{}
+		for _, name := range sortedProviderNames(m.cfg) {
+			p := m.cfg.Providers[name]
+			if !m.cfg.IsBuiltinProvider(name) && p.BaseURL != "" {
+				targets = append(targets, name)
+			}
+		}
+		if len(targets) == 0 {
+			m.appendBlock(&block{kind: blockInfo, content: "no custom providers to refresh — add one with /connect"})
+			return nil
+		}
+		return m.refreshProvidersCmd(targets)
+
 	case "/quit", "/exit":
 		m.quitting = true
 		return tea.Quit

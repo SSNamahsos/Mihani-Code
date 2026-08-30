@@ -96,6 +96,7 @@ var commands = []commandItem{
 	{name: "/mode", description: "Switch between build, plan, research, and ask"},
 	{name: "/providers", description: "Show configured AI providers"},
 	{name: "/models", description: "Show models for the active provider"},
+	{name: "/refresh", description: "Re-fetch model lists for custom providers"},
 	{name: "/connect", description: "Connect a provider and discover its models"},
 	{name: "/git", description: "Show git status or diff"},
 	{name: "/status", description: "Show workspace and session status"},
@@ -248,6 +249,9 @@ func New(cfg config.Config, version, resumeID, initialPrompt string) (Model, err
 	}
 	m.agent.MaxIterations = cfg.MaxIterations
 	m.refreshSpend()
+	// Local endpoints (ollama & co.) must list what is actually installed;
+	// stored lists for them go stale, so re-pull on startup.
+	m.refreshLocalProviderModels()
 
 	// Every launch is a brand-new season (home page). Past conversations in
 	// this folder are reachable via /seasons - never auto-restored.
@@ -260,9 +264,11 @@ func New(cfg config.Config, version, resumeID, initialPrompt string) (Model, err
 	if resumed {
 		m.appendBlock(&block{kind: blockInfo, content: "resumed previous season " + shortID(m.sessionID)})
 	}
-	// Personal keys are user secrets: scrub them from every tool result too.
-	for _, id := range []string{config.BuiltinPrimary, config.BuiltinSecondary} {
-		secrets.Register(cfg.Providers[id].PersonalKey)
+	// User keys are secrets too: scrub them from every tool result as well.
+	for _, p := range cfg.Providers {
+		if p.PersonalKey != "" {
+			secrets.Register(p.PersonalKey)
+		}
 	}
 	if initialPrompt != "" {
 		m.input.SetValue(initialPrompt)
@@ -580,6 +586,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case modelsMsg:
 		return m, m.finishConnect(x)
+
+	case refreshMsg:
+		return m, m.finishRefresh(x)
 
 	case resultMsg:
 		cmd := m.finishTurn(x)

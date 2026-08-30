@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -606,6 +608,114 @@ func TestArrowKeysNavigateCommandPalette(t *testing.T) {
 	}
 	if m.commandIndex != 0 {
 		t.Fatalf("up should wrap back to the first item, commandIndex=%d", m.commandIndex)
+	}
+}
+
+// Regression: the key entered in /connect used to live only in the runtime
+// APIKey field (json:"-"), so it vanished on the next launch and every chat
+// request died with an auth error.
+func TestFinishConnectPersistsKey(t *testing.T) {
+	isolatedUsageHome(t)
+	m := newTestModel(100, 40)
+	m.cfg = config.Config{Providers: map[string]config.Provider{}}
+	m.connectName = "mygw"
+	m.connectURL = "https://gw.example.com"
+	m.connectFields = [3]string{"mygw", "https://gw.example.com", "sk-user-key-abc123456"}
+	if cmd := m.finishConnect(modelsMsg{models: []string{"model-a"}}); cmd != nil {
+		t.Fatal("finishConnect should not return a follow-up cmd")
+	}
+	p := m.cfg.Providers["mygw"]
+	if p.PersonalKey != "sk-user-key-abc123456" {
+		t.Fatalf("connect key must persist via PersonalKey, got %q", p.PersonalKey)
+	}
+	if m.cfg.Key("mygw") != "sk-user-key-abc123456" {
+		t.Fatal("Key() should resolve the persisted connect key")
+	}
+	if p.BaseURL != "https://gw.example.com/v1" {
+		t.Fatalf("bare base URL should be normalized to the /v1 API path, got %s", p.BaseURL)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Providers["mygw"].PersonalKey; got != "sk-user-key-abc123456" {
+		t.Fatalf("connect key lost after save+load: %q", got)
+	}
+}
+
+func TestRefreshRefetchesCustomProviderModels(t *testing.T) {
+	isolatedUsageHome(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"real-1"},{"id":"real-2"}]}`))
+	}))
+	defer server.Close()
+	m := newTestModel(100, 40)
+	m.cfg = config.Config{
+		CurrentProvider: "custom", CurrentModel: "stale-model",
+		Providers: map[string]config.Provider{
+			"custom": {Label: "Custom", Type: "openai", BaseURL: server.URL, Models: []string{"stale-model"}},
+		},
+	}
+	msg := m.refreshProvidersCmd([]string{"custom"})()
+	rm, ok := msg.(refreshMsg)
+	if !ok {
+		t.Fatalf("expected refreshMsg, got %T", msg)
+	}
+	_ = m.finishRefresh(rm)
+	p := m.cfg.Providers["custom"]
+	if len(p.Models) != 2 || p.Models[0] != "real-1" {
+		t.Fatalf("refresh should replace the model list, got %v", p.Models)
+	}
+	if m.cfg.CurrentModel != "real-1" {
+		t.Fatalf("stale current model should reset to the first fresh model, got %q", m.cfg.CurrentModel)
+	}
+}
+
+// Startup must pull the models a local endpoint (ollama) actually has,
+// replacing stale/fake stored lists.
+func TestStartupPullsRealModelsForLocalProvider(t *testing.T) {
+	isolatedUsageHome(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"llama3.1:8b"},{"id":"qwen2.5-coder:7b"}]}`))
+	}))
+	defer server.Close()
+	m := newTestModel(100, 40)
+	m.cfg = config.Config{
+		CurrentProvider: "ollama", CurrentModel: "fake-model",
+		Providers: map[string]config.Provider{
+			"ollama": {Label: "Ollama", Type: "openai", BaseURL: server.URL + "/v1", Models: []string{"fake-model"}},
+		},
+	}
+	m.refreshLocalProviderModels()
+	p := m.cfg.Providers["ollama"]
+	if len(p.Models) != 2 || p.Models[0] != "llama3.1:8b" {
+		t.Fatalf("local provider should list the models the server reports, got %v", p.Models)
+	}
+	if m.cfg.CurrentModel != "llama3.1:8b" {
+		t.Fatalf("fake current model should reset to a real one, got %q", m.cfg.CurrentModel)
+	}
+}
+
+// A stopped local server must not clobber the stored list.
+func TestStartupKeepsStoredListWhenLocalServerDown(t *testing.T) {
+	isolatedUsageHome(t)
+	m := newTestModel(100, 40)
+	m.cfg = config.Config{
+		CurrentProvider: "ollama", CurrentModel: "qwen2.5-coder",
+		Providers: map[string]config.Provider{
+			"ollama": {Label: "Ollama", Type: "openai", BaseURL: "http://127.0.0.1:59999/v1", Models: []string{"qwen2.5-coder"}},
+		},
+	}
+	m.refreshLocalProviderModels()
+	p := m.cfg.Providers["ollama"]
+	if len(p.Models) != 1 || p.Models[0] != "qwen2.5-coder" || m.cfg.CurrentModel != "qwen2.5-coder" {
+		t.Fatalf("stored list must survive a stopped local server: models=%v current=%q", p.Models, m.cfg.CurrentModel)
 	}
 }
 
