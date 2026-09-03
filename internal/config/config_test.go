@@ -53,7 +53,7 @@ func TestBuiltinsUseNeutralBranding(t *testing.T) {
 			t.Fatalf("built-in label leaks branding rules: %q", p.Label)
 		}
 	}
-	if cfg.CurrentProvider != BuiltinPrimary || cfg.CurrentModel != "glm-5.3" {
+	if cfg.CurrentProvider != BuiltinPrimary || cfg.CurrentModel != "DeepSeek-V4-Pro" {
 		t.Fatalf("unexpected defaults: %s/%s", cfg.CurrentProvider, cfg.CurrentModel)
 	}
 	if label := cfg.ProviderLabel(); !strings.Contains(label, "Mihani") {
@@ -64,8 +64,8 @@ func TestBuiltinsUseNeutralBranding(t *testing.T) {
 func TestDefaultsContainShippedModels(t *testing.T) {
 	cfg := defaults()
 	want := map[string][]string{
-		BuiltinPrimary:   {"glm-5.2", "glm-5.3", "kat-coder-pro-v2.5", "MiniMax-M3", "mimo-v2.5"},
-		BuiltinSecondary: {"claude-opus-5", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5", "gpt-5.6-sol", "grok-4-5"},
+		BuiltinPrimary:   {"DeepSeek-V4-Pro", "Qwen3.8-27B", "step-3.7-flash", "sensenova-6.8-flash-lite", "MiniMax-M3"},
+		BuiltinSecondary: {"claude-opus-5", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5"},
 	}
 	for id, models := range want {
 		got := cfg.Providers[id].Models

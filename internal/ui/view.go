@@ -22,6 +22,16 @@ func (m *Model) relayout() {
 	}
 	m.view.Width = maxInt(20, m.width-2)
 	m.view.Height = maxInt(3, m.height-1-m.composerHeight()-1-m.paletteHeight())
+	if m.updateOpen {
+		w := m.updateBoxWidth() - 6
+		if w < 20 {
+			w = 20
+		}
+		m.updateVp.Width = w
+		if h := m.height - 13; h > 3 {
+			m.updateVp.Height = h
+		}
+	}
 	for _, b := range m.blocks {
 		b.invalidate()
 	}
@@ -90,6 +100,8 @@ func (m *Model) View() string {
 		return m.connectView()
 	case m.keyEditOpen:
 		return m.keyEditorView()
+	case m.updateOpen:
+		return m.updateView()
 	case m.overlay != "":
 		return m.overlayView()
 	case m.pendingApproval != nil:
@@ -119,6 +131,9 @@ func (m *Model) View() string {
 func (m *Model) headerRow() string {
 	logo := lipgloss.NewStyle().Bold(true).Foreground(colAccent).Render("◆ mihani")
 	version := lipgloss.NewStyle().Foreground(colFaint).Render(" " + m.version)
+	if m.updateReady() {
+		version += lipgloss.NewStyle().Foreground(colAmber).Render(" · ⟳ " + m.updateLatest.Tag)
+	}
 	modelLabel := fmt.Sprintf("%s · %s", m.cfg.ProviderLabel(), m.cfg.CurrentModel)
 	if effort := m.cfg.CurrentEffort(); effort != "" {
 		modelLabel += " · effort:" + effort
@@ -339,17 +354,28 @@ func (m *Model) welcome() string {
 		return out
 	}
 
-	body := lipgloss.JoinVertical(lipgloss.Left,
+	rows := []string{
 		logo,
 		"",
 		lipgloss.NewStyle().Foreground(colDim).Render("Terminal workspace for building software with AI agents."),
-		"",
-		section("SEASON", infoRows),
-		lipgloss.NewStyle().Foreground(colFaint).Render("  "+seasonHint),
-		"",
-		section("QUICK KEYS", keys),
-		"",
-		section("TRY", examples),
+	}
+	if m.updateReady() {
+		rows = append(rows,
+			"",
+			lipgloss.NewStyle().Bold(true).Foreground(colAmber).Render(
+				"✦ "+m.updateLatest.Tag+" is available — type /update to see what's new and install it"),
+		)
+	}
+	body := lipgloss.JoinVertical(lipgloss.Left,
+		append(rows,
+			"",
+			section("SEASON", infoRows),
+			lipgloss.NewStyle().Foreground(colFaint).Render("  "+seasonHint),
+			"",
+			section("QUICK KEYS", keys),
+			"",
+			section("TRY", examples),
+		)...,
 	)
 	return lipgloss.Place(maxInt(40, m.view.Width), maxInt(8, m.view.Height),
 		lipgloss.Center, lipgloss.Center, body)

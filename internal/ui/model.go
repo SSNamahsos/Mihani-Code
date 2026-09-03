@@ -19,6 +19,7 @@ import (
 	"github.com/SSNamahsos/Mihani-Code/internal/config"
 	"github.com/SSNamahsos/Mihani-Code/internal/secrets"
 	"github.com/SSNamahsos/Mihani-Code/internal/session"
+	"github.com/SSNamahsos/Mihani-Code/internal/update"
 	"github.com/SSNamahsos/Mihani-Code/internal/usage"
 )
 
@@ -106,6 +107,7 @@ var commands = []commandItem{
 	{name: "/undo", description: "Restore the latest Mihani file snapshot"},
 	{name: "/mouse", description: "Show mouse capture state (click menus / drag select)"},
 	{name: "/settings", description: "Open Mihani settings"},
+	{name: "/update", description: "Check for a newer Mihani Code and install it"},
 	{name: "/quit", description: "Exit Mihani Code"},
 }
 
@@ -160,6 +162,19 @@ type Model struct {
 	overlayIndex  int
 	resumeRecords []session.Record
 	msgMenuIndex  int // transcript index of the user message opened from the action menu
+
+	// Update check / self-update state. The check is a plain HTTPS call to
+	// GitHub (no model, zero tokens); the modal shows the changelog + source.
+	updateLatest    *update.Release
+	updateCheckErr  string
+	updateChangelog string
+	updateWantsOpen bool
+	updateOpen      bool
+	updateBusy      bool
+	updateNote      string
+	updateDismissed bool
+	updateCancel    context.CancelFunc
+	updateVp        viewport.Model
 
 	connectOpen   bool
 	connecting    bool
@@ -542,7 +557,7 @@ func Run(cfg config.Config, version, resumeID, initialPrompt string) error {
 	return runErr
 }
 
-func (m *Model) Init() tea.Cmd { return textarea.Blink }
+func (m *Model) Init() tea.Cmd { return tea.Sequence(textarea.Blink, m.checkUpdateCmd()) }
 
 func tick() tea.Cmd {
 	return tea.Tick(120*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
@@ -563,7 +578,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		mouseDebugLog(x, m)
-		if m.connectOpen || m.keyEditOpen || m.pendingApproval != nil || m.pendingAsk != nil {
+		if m.connectOpen || m.keyEditOpen || m.updateOpen || m.pendingApproval != nil || m.pendingAsk != nil {
 			break
 		}
 		if m.overlay != "" {
@@ -613,6 +628,49 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case refreshMsg:
 		return m, m.finishRefresh(x)
 
+	case updateCheckMsg:
+		if x.err == nil && x.release != nil {
+			m.updateLatest = x.release
+			m.updateCheckErr = ""
+		} else {
+			if x.err != nil {
+				m.updateCheckErr = x.err.Error()
+			} else {
+				m.updateCheckErr = "no release found"
+			}
+		}
+		if m.updateWantsOpen {
+			m.updateWantsOpen = false
+			return m, m.openUpdateModal()
+		}
+		if x.err == nil && x.release != nil && update.Newer(x.release.Tag, m.version) && !m.updateDismissed {
+			m.notify(fmt.Sprintf("Mihani Code %s is available — type /update", x.release.Tag))
+		}
+		return m, nil
+
+	case updateChangelogMsg:
+		if m.updateOpen && x.text != "" {
+			m.updateChangelog = x.text
+			m.updateVp.SetContent(m.updateChangelogText())
+			m.refreshView()
+		}
+		return m, nil
+
+	case updateApplyMsg:
+		m.updateBusy = false
+		if m.updateCancel != nil {
+			m.updateCancel()
+			m.updateCancel = nil
+		}
+		if x.err != nil {
+			m.updateNote = "Update failed: " + x.err.Error() + "\n\nTry again, press o to open the release page, or run the installer."
+		} else {
+			m.updateNote = x.note
+			m.updateDismissed = true // installed; stop the banner for this session
+		}
+		m.refreshView()
+		return m, nil
+
 	case resultMsg:
 		cmd := m.finishTurn(x)
 		return m, cmd
@@ -634,7 +692,7 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	// modal states (connect/key editor/ask/approval) fall through so the
 	// focused input keeps its own behavior.
 	if x.Paste && len(x.Runes) > 0 &&
-		m.overlay == "" && !m.connectOpen && !m.keyEditOpen &&
+		m.overlay == "" && !m.connectOpen && !m.keyEditOpen && !m.updateOpen &&
 		m.pendingApproval == nil && m.pendingAsk == nil && !m.focusActive {
 		m.input.InsertString(string(x.Runes))
 		m.resizeComposer()
@@ -664,6 +722,10 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			m.closeKeyEditor()
 			return m, nil, true
 		}
+		if m.updateOpen {
+			m.closeUpdate()
+			return m, nil, true
+		}
 		if m.overlay != "" {
 			m.closeOverlay()
 			return m, nil, true
@@ -686,6 +748,9 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 
 	case m.keyEditOpen:
 		return m, m.updateKeyEditor(x), true
+
+	case m.updateOpen:
+		return m, m.updateKey(x), true
 
 	case m.overlay != "":
 		return m, m.updateOverlayKey(x), true

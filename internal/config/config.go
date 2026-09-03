@@ -97,7 +97,7 @@ func defaults() Config {
 	return Config{
 		Version:         2,
 		CurrentProvider: BuiltinPrimary,
-		CurrentModel:    "glm-5.3",
+		CurrentModel:    "DeepSeek-V4-Pro",
 		MaxTokens:       defaultMaxTokens,
 		ContextWindow:   200_000,
 		BudgetUSD:       DefaultDailyBudgetUSD,
@@ -108,14 +108,14 @@ func defaults() Config {
 				Type:    "openai",
 				BaseURL: "https://api.hcnsec.cn/v1",
 				APIKey:  secrets.Primary(),
-				Models:  []string{"glm-5.2", "glm-5.3", "kat-coder-pro-v2.5", "MiniMax-M3", "mimo-v2.5"},
+				Models:  []string{"DeepSeek-V4-Pro", "Qwen3.8-27B", "step-3.7-flash", "sensenova-6.8-flash-lite", "MiniMax-M3"},
 			},
 			BuiltinSecondary: {
 				Label:   "Mihani Pro",
 				Type:    "openai",
 				BaseURL: "https://seekai.cc/v1",
 				APIKey:  secrets.Secondary(),
-				Models:  []string{"claude-opus-5", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5", "gpt-5.6-sol", "grok-4-5"},
+				Models:  []string{"claude-opus-5", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5"},
 				// Native function calling verified against this gateway
 				// (2026-08-30 probe: streamed tool_calls with finish=tool_calls).
 				// The text-based tool protocol is unreliable with opus models —
@@ -206,6 +206,12 @@ func migrateBuiltins(c *Config) {
 		if p := c.Providers[BuiltinPrimary]; len(p.Models) > 0 && !containsModel(p.Models, c.CurrentModel) {
 			c.CurrentModel = p.Models[0]
 		}
+	}
+	// A shipped model list may shrink between releases. If the stored active
+	// model is no longer offered by its provider, reset it to that provider's
+	// first model so we never point at a model that was removed.
+	if p, ok := c.Providers[c.CurrentProvider]; ok && len(p.Models) > 0 && !containsModel(p.Models, c.CurrentModel) {
+		c.CurrentModel = p.Models[0]
 	}
 }
 

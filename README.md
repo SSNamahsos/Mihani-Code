@@ -45,6 +45,8 @@ go install github.com/SSNamahsos/Mihani-Code/cmd/mihani@latest
 
 All three routes give you a `mihani` binary you run inside any project directory. Prebuilt binaries for Windows, Linux, and macOS are attached to every [GitHub Release](https://github.com/SSNamahsos/Mihani-Code/releases) automatically by CI.
 
+**Staying current:** from v0.2.18 on, Mihani checks GitHub for a newer release on startup — a direct HTTPS call to `api.github.com`, no API key and zero model tokens. When one is available the home page and header flag it, and `/update` shows the new version's changelog ("what's new") and the source release, with `i` to download and install it in place, `o` to open it on GitHub, or `d` to hide the notice for the session. On Windows the in-place swap completes the moment you close the window.
+
 ## Build from source
 
 Requires Go 1.24 or newer.
@@ -121,6 +123,7 @@ While a turn is running you can keep typing: additional prompts are queued and s
 - `/mcp` configured MCP servers
 - `/undo` restore the latest pre-change snapshot
 - `/settings` auto-confirm toggle and limits
+- `/update` check for a newer Mihani Code and install it
 - `/quit` exit
 
 ## Modes
@@ -140,8 +143,8 @@ Mihani Code ships with two built-in backends presented under Mihani branding —
 
 | Provider | Public label | Models |
 | --- | --- | --- |
-| `mihani` | Mihani Cloud | `glm-5.2`, `glm-5.3` *(default)*, `kat-coder-pro-v2.5`, `MiniMax-M3`, `mimo-v2.5` *(free)* |
-| `mihani-pro` | Mihani Pro | `claude-opus-5`, `claude-opus-4-8`, `claude-fable-5`, `claude-sonnet-5`, `gpt-5.6-sol`, `grok-4-5` |
+| `mihani` | Mihani Cloud | `DeepSeek-V4-Pro` *(default)*, `Qwen3.8-27B`, `step-3.7-flash`, `sensenova-6.8-flash-lite`, `MiniMax-M3` |
+| `mihani-pro` | Mihani Pro | `claude-opus-5`, `claude-opus-4-8`, `claude-fable-5`, `claude-sonnet-5` |
 
 Switch with `/providers` and `/models`; `/connect` adds any other OpenAI-compatible endpoint under a name you choose. Upstream identifiers from earlier releases are renamed automatically on first launch and never shown in the UI.
 

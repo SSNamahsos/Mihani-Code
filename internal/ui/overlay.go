@@ -518,6 +518,14 @@ func (m *Model) command(s string) tea.Cmd {
 		}
 		return m.refreshProvidersCmd(targets)
 
+	case "/update":
+		if m.updateLatest != nil {
+			return m.openUpdateModal()
+		}
+		m.updateWantsOpen = true
+		m.notify("Checking for updates on GitHub…")
+		return m.checkUpdateCmd()
+
 	case "/quit", "/exit":
 		m.quitting = true
 		return tea.Quit

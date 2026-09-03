@@ -2,6 +2,20 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.18
+
+### Added
+- **In-app update check + self-update.** On startup Mihani checks GitHub for a newer release (a plain HTTPS call to `api.github.com` — no model call, zero tokens). When one exists, the home page and the header show a marker, and `/update` opens a panel with the full changelog for the new version ("what's new"), the source (the GitHub release), and one-key actions: `i` downloads the new binary and installs it over the current one (on Windows the swap happens automatically when you close the window), `o` opens the release on GitHub, `d` hides the notice for this session.
+- **`/update` command** — manually re-check for a newer version and open the update panel.
+
+### Changed
+- **Mihani Cloud model lineup replaced.** Now ships `DeepSeek-V4-Pro` (default), `Qwen3.8-27B`, `step-3.7-flash`, `sensenova-6.8-flash-lite`, and `MiniMax-M3`. The previous `glm-5.2`, `glm-5.3`, `kat-coder-pro-v2.5`, and `mimo-v2.5` models are removed.
+- **Mihani Pro trimmed to the Claude family.** `gpt-5.6-sol` and `grok-4-5` are removed; `claude-opus-5`, `claude-opus-4-8`, `claude-fable-5`, and `claude-sonnet-5` remain.
+
+### Notes
+- If your saved active model was one of the removed models, Mihani resets it to that provider's first model automatically on the next launch — nothing to fix by hand.
+- This is the first release to include the update feature, so it will not yet notify users still on earlier versions (they do not have the checker yet). Install v0.2.18 once — via the installer script or manually — and every release after it is detected automatically in-app.
+
 ## v0.2.17
 
 ### Fixed
