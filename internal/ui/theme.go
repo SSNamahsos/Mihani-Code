@@ -31,3 +31,37 @@ var modes = []mode{
 }
 
 func currentMode(index int) mode { return modes[index%len(modes)] }
+
+// plainUI switches the whole UI to ASCII borders + a plain spinner for
+// terminals whose font lacks Unicode box-drawing / braille glyphs (they would
+// otherwise render as "?"). Default off; toggled in settings or via
+// "plain_ui": true in config.json.
+var plainUI bool
+
+// boxBorder is the standard rounded border, or an ASCII one in plain mode.
+func boxBorder() lipgloss.Border {
+	if plainUI {
+		return lipgloss.Border{Top: "-", Bottom: "-", Left: "|", Right: "|",
+			TopLeft: "+", TopRight: "+", BottomLeft: "+", BottomRight: "+"}
+	}
+	return lipgloss.RoundedBorder()
+}
+
+// boxBorderDouble is the double border, or an ASCII one in plain mode.
+func boxBorderDouble() lipgloss.Border {
+	if plainUI {
+		return lipgloss.Border{Top: "=", Bottom: "=", Left: "#", Right: "#",
+			TopLeft: "#", TopRight: "#", BottomLeft: "#", BottomRight: "#"}
+	}
+	return lipgloss.DoubleBorder()
+}
+
+// spinFrame returns the spinner glyph for the given tick. Braille frames are
+// the prettiest but the least widely supported, so plain mode falls back to
+// classic ASCII characters.
+func spinFrame(n int) string {
+	if plainUI {
+		return []string{"|", "/", "-", "\\"}[n%4]
+	}
+	return []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}[n%10]
+}

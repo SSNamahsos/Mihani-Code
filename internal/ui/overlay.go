@@ -14,6 +14,7 @@ import (
 	"github.com/SSNamahsos/Mihani-Code/internal/config"
 	"github.com/SSNamahsos/Mihani-Code/internal/gitx"
 	"github.com/SSNamahsos/Mihani-Code/internal/mcp"
+	"github.com/SSNamahsos/Mihani-Code/internal/skills"
 	"github.com/SSNamahsos/Mihani-Code/internal/secrets"
 	"github.com/SSNamahsos/Mihani-Code/internal/session"
 	"github.com/SSNamahsos/Mihani-Code/internal/tools"
@@ -199,9 +200,11 @@ func (m *Model) selectOverlayItem() {
 				_ = m.cfg.Save()
 				m.openOverlay("Settings", m.settingsItems())
 				return
-			case label == "Reset usage window":
-				usage.Reset()
-				m.refreshSpend()
+			case label == "Plain UI (ASCII)":
+				plainUI = !plainUI
+				m.cfg.PlainUI = plainUI
+				_ = m.cfg.Save()
+				m.relayout()
 				m.openOverlay("Settings", m.settingsItems())
 				return
 			case strings.HasPrefix(label, "Personal API key · "):
@@ -264,7 +267,7 @@ func (m *Model) overlayView() string {
 		hint,
 	)
 	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(boxBorder()).
 		BorderForeground(colBorder).
 		Padding(1, 2).
 		Width(boxWidth).
@@ -450,6 +453,19 @@ func (m *Model) command(s string) tea.Cmd {
 		}
 		m.appendBlock(&block{kind: blockInfo, content: strings.TrimRight(b.String(), "\n")})
 
+	case "/skills":
+		found := skills.Discover(m.root)
+		if len(found) == 0 {
+			m.appendBlock(&block{kind: blockInfo, content: "no skills found - install under .mihani/skills/<name>/SKILL.md, .agents/skills/<name>/SKILL.md, or ~/.agents/skills/<name>/SKILL.md"})
+			return nil
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "%d skill(s) installed - the AI loads them automatically when a task matches:\n", len(found))
+		for _, s := range found {
+			fmt.Fprintf(&sb, "- %s: %s\n  %s\n", s.Name, s.Description, s.Path)
+		}
+		m.appendBlock(&block{kind: blockInfo, content: strings.TrimRight(sb.String(), "\n")})
+
 	case "/undo":
 		result, err := tools.Undo(m.root)
 		if err != nil {
@@ -631,9 +647,13 @@ func (m *Model) settingsItems() []overlayItem {
 	} else {
 		used = fmt.Sprintf("$%.2f tracked - not capped (your own credentials)", m.spend)
 	}
+	plain := "off - Unicode borders (recommended)"
+	if plainUI {
+		plain = "on - ASCII borders + spinner (fonts missing those glyphs)"
+	}
 	items := []overlayItem{
 		{label: "Auto confirm", detail: auto + "  (enter toggles)"},
-		{label: "Reset usage window", detail: "clear today's spend record  (enter resets)"},
+		{label: "Plain UI (ASCII)", detail: plain + "  (enter toggles)"},
 		{label: "Daily budget", detail: fmt.Sprintf("$%.2f on Mihani built-in endpoints only", m.cfg.Budget())},
 		{label: "Used (24h)", detail: used},
 	}
@@ -713,7 +733,7 @@ func (m *Model) keyEditorView() string {
 			"Your own key for this endpoint. When the shared daily credit is\nexhausted, Mihani switches to it automatically. Stored only in\nyour local config file and never displayed again."),
 		"",
 		lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
+			Border(boxBorder()).
 			BorderForeground(colAccent).
 			Padding(0, 1).
 			Width(boxWidth-8).
@@ -722,7 +742,7 @@ func (m *Model) keyEditorView() string {
 		lipgloss.NewStyle().Foreground(colFaint).Render("enter save · esc cancel"),
 	)
 	box := lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
+		Border(boxBorderDouble()).
 		BorderForeground(colAccent).
 		Padding(1, 3).
 		Width(boxWidth).

@@ -229,11 +229,13 @@ Keep the repository public so the install one-liners and release downloads are r
 
 ## Configuration
 
-The config file lives at `~/.mihani/config.json` after your first change and supports extra fields such as `context_window`, `max_iterations`, `budget_usd`, and `pricing`. Built-in provider credentials cannot be stored in or read from this file; custom providers added via `/connect` store their key locally in the provider's `personal_key` field (used for that endpoint's requests), or reference an environment variable through `env_key` if they prefer.
+The config file lives at `~/.mihani/config.json` after your first change and supports extra fields such as `context_window`, `max_iterations`, `budget_usd`, and `pricing`.
+
+**If characters show up as `?`:** on some terminals (commonly the Windows console with a basic font) the rounded box corners and the animated spinner render as `?` because the font lacks those glyphs. Set `"plain_ui": true` in config — or toggle **Plain UI (ASCII)** in `/settings` — to switch Mihani to plain ASCII borders and spinner. This only fixes Mihani's own chrome; non-Latin text (Persian/Arabic) still needs a font that contains those glyphs — run Mihani in **Windows Terminal** with a Unicode font such as **Cascadia Code** or **Noto Sans Mono** (add a fallback font with Arabic/Persian coverage in the font settings), and make sure the console is in UTF-8 (`chcp 65001`). Built-in provider credentials cannot be stored in or read from this file; custom providers added via `/connect` store their key locally in the provider's `personal_key` field (used for that endpoint's requests), or reference an environment variable through `env_key` if they prefer.
 
 ## Skills and MCP
 
-Skills live in `.mihani/skills/<name>/SKILL.md` per project or `~/.mihani/skills/<name>/SKILL.md` globally; their names and descriptions join the agent context automatically.
+Skills are `SKILL.md` folders loaded from `.mihani/skills/<name>/` and `.agents/skills/<name>/` (per project) and `~/.mihani/skills/<name>/` and `~/.agents/skills/<name>/` (globally). The `.agents` location is where Claude Code / codex and most skill installers put them. Each skill's frontmatter `description` is read, and when a task matches it the AI opens that skill's `SKILL.md` and follows the instructions inside it. List what's installed with `/skills`.
 
 MCP stdio servers are declared in `.mihani/mcp.json`:
 

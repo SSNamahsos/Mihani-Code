@@ -104,6 +104,7 @@ var commands = []commandItem{
 	{name: "/status", description: "Show workspace and session status"},
 	{name: "/session", description: "Show the current session ID"},
 	{name: "/mcp", description: "Show configured MCP servers"},
+	{name: "/skills", description: "List installed skills (auto-loaded by the AI)"},
 	{name: "/undo", description: "Restore the latest Mihani file snapshot"},
 	{name: "/mouse", description: "Show mouse capture state (click menus / drag select)"},
 	{name: "/settings", description: "Open Mihani settings"},
@@ -242,6 +243,7 @@ func (m *Model) toastTTLor() time.Duration {
 // otherwise the most recent session for this workspace is restored. An empty
 // initialPrompt leaves the composer untouched.
 func New(cfg config.Config, version, resumeID, initialPrompt string) (Model, error) {
+	plainUI = cfg.PlainUI
 	root, err := os.Getwd()
 	if err != nil {
 		return Model{}, err
@@ -1779,7 +1781,7 @@ func (m *Model) nearUserMessage(y int) int {
 }
 
 func (m *Model) spinnerGlyph() string {
-	return []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}[m.spinner%10]
+	return spinFrame(m.spinner)
 }
 
 func (m *Model) saveSession() {

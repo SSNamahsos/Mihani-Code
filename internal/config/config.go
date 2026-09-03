@@ -68,6 +68,7 @@ type Config struct {
 	Pricing         map[string]pricing.Entry `json:"pricing,omitempty"`
 	AutoConfirm     bool                     `json:"auto_confirm"`
 	UseMouse        *bool                    `json:"use_mouse,omitempty"` // nil = mouse on (click menus + drag select); false = native terminal selection only
+	PlainUI         bool                     `json:"plain_ui,omitempty"` // true = ASCII borders + spinner (for terminals whose font lacks box-drawing/braille glyphs)
 	MaxIterations   int                      `json:"max_iterations,omitempty"`
 	Workspace       string                   `json:"workspace,omitempty"`
 	Providers       map[string]Provider      `json:"providers"`

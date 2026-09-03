@@ -932,9 +932,9 @@ const basePrompt = "You are Mihani Code, a concise terminal coding agent. Inspec
 func workspaceContext(root string) string {
 	var b strings.Builder
 	if found := skills.Discover(root); len(found) > 0 {
-		b.WriteString("\n\nProject skills available:")
+		b.WriteString("\n\n# Skills\nThe following skills are installed. When a task matches a skill's description, use the read_file tool to open its SKILL.md path and follow the instructions inside it before proceeding; do not guess at what a skill does.")
 		for _, skill := range found {
-			b.WriteString("\n- " + skill.Name + ": " + skill.Description)
+			b.WriteString("\n- " + skill.Name + ": " + skill.Description + "  (file: " + skill.Path + ")")
 		}
 	}
 	if servers := mcp.Discover(root); len(servers) > 0 {

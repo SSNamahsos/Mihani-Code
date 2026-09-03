@@ -2,6 +2,22 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.19
+
+### Added
+- **`/skills` command** — lists every installed skill (name, description, path).
+- **Skills are now actually used by the AI.** Skills are discovered from `.mihani/skills/` and `.agents/skills/` (per project) and `~/.mihani/skills/` and `~/.agents/skills/` (globally). `.agents/skills` is where Claude Code / codex and most skill installers put them. The `description` field from each skill's YAML frontmatter is parsed (previously only the first line was read, which was the `---` fence and therefore useless), and the full `SKILL.md` path is passed to the model with an instruction to open it and follow it when a task matches.
+- **Plain UI (ASCII) mode** — for terminals whose font can't render the rounded box corners or the animated braille spinner (they show up as `?`). Toggle **Plain UI (ASCII)** in `/settings`, or set `"plain_ui": true` in config, to switch to plain ASCII borders and spinner. Only Mihani's own chrome is affected; non-Latin text still needs a font with those glyphs.
+
+### Fixed
+- **`/update` didn't show the full changelog when you were already current.** It only fetched the detailed changelog when a *newer* release existed; otherwise it showed the sparse auto-generated GitHub release body (just a compare link). Now the full changelog for the version is always fetched from `CHANGELOG.md` and is shown in a scrollable panel (↑↓ / pgup / pgdn), with the source release link.
+
+### Removed
+- **"Reset usage window" from `/settings`** — the option and its handler are gone.
+
+### Notes
+- If Persian/Arabic (or the corners/spinner) still render as `?`, run Mihani in **Windows Terminal** with a Unicode font such as Cascadia Code or Noto Sans Mono (add a fallback font with Arabic/Persian coverage in the font settings), and keep the console in UTF-8 (`chcp 65001`). `plain_ui` fixes the corners/spinner but cannot substitute for a font that lacks the glyphs themselves.
+
 ## v0.2.18
 
 ### Added

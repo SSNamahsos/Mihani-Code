@@ -154,7 +154,7 @@ func (m *Model) headerRow() string {
 func (m *Model) composerBox() string {
 	mode := currentMode(m.modeIndex)
 	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(boxBorder()).
 		BorderForeground(mode.color).
 		Padding(0, 1).
 		Width(maxInt(10, m.width-2)).
@@ -293,7 +293,7 @@ func (m *Model) commandPalette() string {
 		rows = append(rows, style.Render(prefix+fmt.Sprintf("%-11s %s", item.name, item.description)))
 	}
 	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(boxBorder()).
 		BorderForeground(colBorder).
 		Padding(0, 1).
 		Width(maxInt(30, m.width-6)).

@@ -142,7 +142,7 @@ func (m *Model) askView() string {
 	body.WriteString("\n")
 	if m.askCustom {
 		field := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
+			Border(boxBorder()).
 			BorderForeground(colCyan).
 			Padding(0, 1).
 			Width(minInt(60, maxInt(24, boxWidth-8))).
@@ -154,7 +154,7 @@ func (m *Model) askView() string {
 	}
 
 	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(boxBorder()).
 		BorderForeground(colCyan).
 		Padding(1, 2).
 		Width(boxWidth).

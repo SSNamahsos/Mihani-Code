@@ -35,7 +35,7 @@ func (m *Model) approvalOverlay() string {
 		m.approvalHints(),
 	)
 	box := lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
+		Border(boxBorderDouble()).
 		BorderForeground(colAmber).
 		Padding(1, 3).
 		Width(boxWidth).

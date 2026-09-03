@@ -112,7 +112,7 @@ func (b *block) renderUser(w int) string {
 		inner.WriteString("\n" + hints)
 	}
 	border := colFaint
-	borderStyle := lipgloss.RoundedBorder()
+	borderStyle := boxBorder()
 	if b.focused {
 		border = colAccent
 	}
@@ -256,7 +256,7 @@ func (b *block) renderTool(w int, spinnerChar string) string {
 		borderColor = colAmber
 	}
 	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(boxBorder()).
 		BorderForeground(borderColor).
 		Padding(0, 1).
 		Width(maxInt(14, w-2)).
@@ -299,7 +299,7 @@ func (b *block) renderTodo(w int, spinnerChar string) string {
 		borderColor = colRed
 	}
 	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(boxBorder()).
 		BorderForeground(borderColor).
 		Padding(0, 1).
 		Width(maxInt(14, w-2)).

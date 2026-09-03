@@ -59,8 +59,8 @@ func (m *Model) openUpdateModal() tea.Cmd {
 	m.updateOpen = true
 	m.updateNote = ""
 	m.updateBusy = false
-	if m.updateReady() {
-		m.updateVp.SetContent("Loading what's new…")
+	if m.updateLatest != nil {
+		m.updateVp.SetContent("Loading changelog…")
 		return m.fetchChangelogCmd()
 	}
 	m.updateVp.SetContent(m.updateChangelogText())
@@ -242,7 +242,7 @@ func (m *Model) updateView() string {
 		lipgloss.NewStyle().Foreground(colFaint).Render(hint),
 	)
 	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(boxBorder()).
 		BorderForeground(colBorder).
 		Padding(1, 2).
 		Width(boxWidth).

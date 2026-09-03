@@ -286,7 +286,7 @@ func (m *Model) connectView() string {
 		rows = append(rows,
 			labelStyle.Render(label),
 			lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
+				Border(boxBorder()).
 				BorderForeground(borderColor).
 				Padding(0, 1).
 				Width(boxWidth-8).
@@ -313,7 +313,7 @@ func (m *Model) connectView() string {
 	body = lipgloss.JoinVertical(lipgloss.Left, body, "", statusLine)
 
 	box := lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
+		Border(boxBorderDouble()).
 		BorderForeground(colAccent).
 		Padding(1, 3).
 		Width(boxWidth).
