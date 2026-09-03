@@ -2,6 +2,15 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.20
+
+### Fixed
+- **Windows self-update didn't actually apply.** A deferred cleanup deleted the downloaded binary the moment the download returned — before the deferred Windows swap (which runs only after the process exits, since a running .exe is locked) could move it into place. So after a restart Mihani was still on the old version. The cleanup now only happens on a failed download; the swap consumes the file.
+- **Windows update now swaps reliably and restarts itself.** The replace helper waits for Mihani to fully exit, retries the file swap for a few seconds (so the file handle has time to release), then relaunches the new binary in a fresh window. After you pick **install**, the app closes and reopens on its own on the updated version — no more manual close-and-rerun.
+
+### Notes
+- If the reopened window still shows the old version, either a file lock / antivirus blocked the replace, or you have more than one `mihani` on your PATH. Run `where mihani`, and delete the stale copy so both the in-app updater and the `mihani` command point at the same file.
+
 ## v0.2.19
 
 ### Added

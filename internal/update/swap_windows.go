@@ -10,33 +10,39 @@ import (
 )
 
 // Windows process-creation flags (mirrors golang.org/x/sys/windows) used to
-// detach the self-update helper so it outlives Mihani.
+// detach the self-update helper so it outlives Mihani and the console window.
 const (
 	detachedProcess       = 0x00000008
 	createNewProcessGroup = 0x00000200
 )
 
-// swapBinary cannot overwrite a running .exe on Windows (the file stays locked
-// until the process exits). It launches a hidden, detached PowerShell helper
-// that waits for Mihani to exit, then removes the locked exe and moves the
-// downloaded file into place. The user only has to restart.
-func swapBinary(exe, tmp, tag string) (string, error) {
-	pid := os.Getpid()
+// swapBinary installs the downloaded binary over the running exe and relaunches
+// it. A running .exe is locked on Windows, so a detached, console-free
+// PowerShell helper waits for Mihani to exit, swaps the file (retrying for the
+// handle to be released), then launches the new exe in a fresh window. It
+// returns willRestart=true so the UI quits itself, letting the helper run.
+func swapBinary(exe, tmp, tag string) (string, bool, error) {
 	script := fmt.Sprintf(
-		"$ErrorActionPreference='SilentlyContinue'; $p=Get-Process -Id %d; while($p -and -not $p.HasExited){ Start-Sleep -Milliseconds 400 }; Remove-Item -Force '%s'; Move-Item -Force '%s' '%s'",
-		pid, exe, tmp, exe,
+		"$tgt=%d; $exe='%s'; $tmp='%s'; "+
+			"while($true){ $p=Get-Process -Id $tgt -ErrorAction SilentlyContinue; if($null -eq $p){break}; if($p.HasExited){break}; Start-Sleep -Milliseconds 300 }; "+
+			"Start-Sleep -Milliseconds 800; "+
+			"for($i=0;$i -lt 12;$i++){ try{ if(Test-Path $exe){ Remove-Item -Force $exe }; Move-Item -Force $tmp $exe; break } catch { Start-Sleep -Milliseconds 700 } }; "+
+			"Start-Process -FilePath $exe",
+		os.Getpid(), exe, tmp,
 	)
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script)
+	cmd := exec.Command("powershell.exe",
+		"-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
+		"-Command", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
 		CreationFlags: detachedProcess | createNewProcessGroup,
 	}
 	if err := cmd.Start(); err != nil {
 		os.Remove(tmp)
-		return "", fmt.Errorf("could not start the update helper (%w) — install from %s", err, HomePage)
+		return "", false, fmt.Errorf("could not start the update helper (%w) — install from %s", err, HomePage)
 	}
 	if p := cmd.Process; p != nil {
 		_ = p.Release() // do not wait; the helper is detached
 	}
-	return fmt.Sprintf("Update for %s is ready.\n\nIt will replace itself the moment you close this window — just restart Mihani to finish.", tag), nil
+	return fmt.Sprintf("Updated to %s. Mihani is closing and reopening itself…", tag), true, nil
 }

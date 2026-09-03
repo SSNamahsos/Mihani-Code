@@ -25,8 +25,9 @@ type updateChangelogMsg struct {
 
 // updateApplyMsg carries the result of a download/self-update attempt.
 type updateApplyMsg struct {
-	note string
-	err  error
+	note        string
+	willRestart bool // platform will relaunch the app; the UI should quit
+	err         error
 }
 
 // checkUpdateCmd fetches the newest GitHub release in the background and
@@ -124,8 +125,8 @@ func (m *Model) updateScroll(n int) tea.Cmd {
 // over updateApplyMsg, so the UI stays responsive and esc can cancel.
 func (m *Model) applyUpdateCmd(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		note, err := update.Apply(ctx, m.updateLatest)
-		return updateApplyMsg{note: note, err: err}
+		note, willRestart, err := update.Apply(ctx, m.updateLatest)
+		return updateApplyMsg{note: note, willRestart: willRestart, err: err}
 	}
 }
 

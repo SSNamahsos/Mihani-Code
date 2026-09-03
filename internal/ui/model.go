@@ -666,11 +666,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if x.err != nil {
 			m.updateNote = "Update failed: " + x.err.Error() + "\n\nTry again, press o to open the release page, or run the installer."
-		} else {
-			m.updateNote = x.note
-			m.updateDismissed = true // installed; stop the banner for this session
+			m.refreshView()
+			return m, nil
 		}
+		m.updateNote = x.note
+		m.updateDismissed = true // installed; stop the banner for this session
 		m.refreshView()
+		if x.willRestart {
+			// Show the "closing and reopening" note briefly, then quit so the
+			// detached helper can swap the binary and relaunch the new version.
+			return m, func() tea.Msg {
+				time.Sleep(1500 * time.Millisecond)
+				return tea.Quit
+			}
+		}
 		return m, nil
 
 	case resultMsg:

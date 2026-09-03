@@ -245,50 +245,56 @@ func currentBinary() (string, error) {
 // the UI) or an error. The download is capped at 300 MB; a file smaller than
 // 4 KB is rejected as clearly not a real binary. ctx may be cancelled by the
 // user (esc) to abort the download.
-func Apply(ctx context.Context, r *Release) (string, error) {
+func Apply(ctx context.Context, r *Release) (string, bool, error) {
 	if r == nil {
-		return "", fmt.Errorf("no release to install")
+		return "", false, fmt.Errorf("no release to install")
 	}
 	dlURL := AssetForURL(r)
 	if dlURL == "" {
-		return "", fmt.Errorf("no release binary is published for %s/%s — install from %s", runtime.GOOS, runtime.GOARCH, r.URL)
+		return "", false, fmt.Errorf("no release binary is published for %s/%s — install from %s", runtime.GOOS, runtime.GOARCH, r.URL)
 	}
 	exe, err := currentBinary()
 	if err != nil {
-		return "", fmt.Errorf("could not locate the running binary: %w", err)
+		return "", false, fmt.Errorf("could not locate the running binary: %w", err)
 	}
 	dir := filepath.Dir(exe)
 	tmp := filepath.Join(dir, filepath.Base(exe)+".update.tmp")
-	defer os.Remove(tmp) // best-effort cleanup; swapBinary renames it away on success
 
 	client := &http.Client{Timeout: 3 * time.Minute}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dlURL, nil)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	req.Header.Set("User-Agent", "mihani-code-updater")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("download failed: %w", err)
+		return "", false, fmt.Errorf("download failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download failed: github %d", resp.StatusCode)
+		return "", false, fmt.Errorf("download failed: github %d", resp.StatusCode)
 	}
 	f, err := os.Create(tmp)
 	if err != nil {
-		return "", fmt.Errorf("could not write the new binary: %w", err)
+		return "", false, fmt.Errorf("could not write the new binary: %w", err)
 	}
 	n, err := io.Copy(f, io.LimitReader(resp.Body, 300<<20))
 	closeErr := f.Close()
 	if err != nil {
-		return "", fmt.Errorf("download interrupted: %w", err)
+		os.Remove(tmp)
+		return "", false, fmt.Errorf("download interrupted: %w", err)
 	}
 	if closeErr != nil {
-		return "", fmt.Errorf("could not finish writing the new binary: %w", closeErr)
+		os.Remove(tmp)
+		return "", false, fmt.Errorf("could not finish writing the new binary: %w", closeErr)
 	}
 	if n < 4096 {
-		return "", fmt.Errorf("downloaded file is only %d bytes — not a valid binary", n)
+		os.Remove(tmp)
+		return "", false, fmt.Errorf("downloaded file is only %d bytes — not a valid binary", n)
 	}
+	// Do NOT delete tmp here: on Windows the swap happens only after this
+	// process exits (a running .exe is locked), so the helper still needs tmp.
+	// swapBinary consumes tmp (renames it on Unix, the helper moves it on
+	// Windows, and it is removed on failure).
 	return swapBinary(exe, tmp, r.Tag)
 }
