@@ -56,6 +56,7 @@ type Agent struct {
 	lastFinish    string // finish_reason of the latest request ("stop", "length", "tool_calls")
 	lengthNudges  int    // per-turn continuation nudges after a "length" finish
 	proseNudges   int    // per-turn nudges when the model dumps file content as text
+	botchedNudges int    // per-turn nudges when a tool call was botched (unparseable)
 }
 
 func (a *Agent) Reset()                           { a.history = nil; a.tokens = 0 }
@@ -90,6 +91,7 @@ func (a *Agent) Send(ctx context.Context, prompt, mode string, approve func(stri
 	a.tokens += estimateTokens(prompt)
 	a.lengthNudges = 0 // continuation budget is per turn
 	a.proseNudges = 0  // prose-dump nudge budget is per turn
+	a.botchedNudges = 0 // botched-tool-call nudge budget is per turn
 	if err := a.ensureMCP(ctx, emit); err != nil {
 		emit(Event{Kind: "activity", Text: "MCP unavailable: " + err.Error()})
 	}
@@ -170,6 +172,24 @@ func (a *Agent) sendOpenAI(ctx context.Context, p config.Provider, prompt, mode 
 							call.Name, call.ID, status, clip(result, historyToolLimit))
 					}
 					a.history = append(a.history, map[string]any{"role": "user", "content": results.String()})
+					continue
+				}
+			}
+			// Recovery for a BOTCHED tool call: the model tried to call a tool
+			// but emitted it in a form Mihani can't parse (e.g. a custom tag like
+			// <Longcat_tool_call> instead of the standard block, or malformed JSON).
+			// Without this the turn would silently stop with a half-call shown to
+			// the user. Nudge it to resend with valid syntax, bounded so we never
+			// loop forever.
+			if c, _ := assistant["content"].(string); c != "" && a.botchedNudges < 3 {
+				if _, perr := extractToolCalls(c); perr != nil || looksLikeBotchedToolCall(c) {
+					a.botchedNudges++
+					a.history = append(a.history, map[string]any{"role": "user", "content":
+						"Your previous reply tried to call a tool but did not use the required format, so it was not executed. " +
+							"To call a tool, end your reply with exactly one block of the form: " +
+							"<tool_call>{\"name\": \"tool_name\", \"arguments\": {...}}</tool_call> (valid JSON on one line). " +
+							"Available tools: " + toolNames() + ". Please resend the tool call using that exact format. If the task is actually done, simply answer in plain text with no tool_call block."})
+					emit(Event{Kind: "activity", Text: "nudging: resend tool call with valid syntax"})
 					continue
 				}
 			}
@@ -979,7 +999,7 @@ var modeGuidance = map[string]string{
 	"":         "",
 	"build":    "You may edit files and run commands to complete the task directly.",
 	"plan":     "Do NOT modify files or run mutating commands. Explore the codebase, then propose a concrete implementation plan.",
-	"research": "Do NOT modify files. Investigate code, docs, and options; report findings with references.",
+	"research": "Investigate code, docs, and options; report findings with references. You may read freely and, when the task calls for it, write deliverables (e.g. notes, reports, docs, files) — just keep research accurate and don't refactor or delete existing code.",
 	"ask":      "Answer questions only. Do NOT modify files or run mutating commands.",
 }
 

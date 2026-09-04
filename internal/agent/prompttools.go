@@ -92,6 +92,47 @@ var (
 	whitespaceOnly  = regexp.MustCompile(`^\s*$`)
 )
 
+// toolNames lists the available tool names, comma-separated, for corrective
+// nudges that remind the model of the valid tool-call syntax.
+func toolNames() string {
+	names := make([]string, 0, len(tools.Registry))
+	for _, t := range tools.Registry {
+		names = append(names, t.Name)
+	}
+	return strings.Join(names, ", ")
+}
+
+// knownToolNames returns the available tool names as a slice.
+func knownToolNames() []string {
+	names := make([]string, 0, len(tools.Registry))
+	for _, t := range tools.Registry {
+		names = append(names, t.Name)
+	}
+	return names
+}
+
+// botchedAliasTagRe matches an aliased/prefixed tool-call tag such as
+// <Longcat_tool_call> — a model emitting a tool call under a non-standard tag
+// name instead of the format Mihani parses.
+var botchedAliasTagRe = regexp.MustCompile(`<\w*_tool_call>`)
+
+// looksLikeBotchedToolCall reports whether a reply that parsed to ZERO valid
+// tool calls still looks like an attempted (malformed) tool call: a closing tag
+// for a known tool (</ask_user>, </write_file>, ...) or an aliased *_tool_call
+// tag. Such a reply would otherwise silently end the turn with a half-call shown
+// to the user.
+func looksLikeBotchedToolCall(text string) bool {
+	if botchedAliasTagRe.MatchString(text) {
+		return true
+	}
+	for _, name := range knownToolNames() {
+		if strings.Contains(text, "</"+name+">") {
+			return true
+		}
+	}
+	return false
+}
+
 // extractToolCalls pulls every well-formed tool call out of an assistant
 // message, merging tagged and fenced blocks in the order they appear, then
 // falling back to a bare JSON object heuristic.

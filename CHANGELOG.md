@@ -2,6 +2,14 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.26
+
+### Fixed
+- **A malformed tool call silently stopped the turn.** Some models (seen on the Mihani Pro gateway) emit a tool call under a non-standard tag — e.g. `<Longcat_tool_call>…</ask_user>` — that Mihani can't parse as a tool call. Previously that ended the turn with a half-call shown to the user and no recovery. Now Mihani detects a botched tool call (an aliased `*_tool_call` tag, a `</toolname>` closing tag, or a block that was opened but not parsed) and nudges the model to resend it using the required `<tool_call>{…}` format — bounded so it never loops. The turn carries on instead of stopping.
+
+### Changed
+- **Research mode can now write.** Research previously was hard-locked read-only (and its prompt said “Do NOT modify files”), so asking it to “research and create files” silently failed. Research now reads freely **and** can create deliverables (notes, reports, docs, files); it still keeps research accurate and won't refactor or delete existing code. *Plan* and *Ask* remain read-only.
+
 ## v0.2.25
 
 ### Fixed

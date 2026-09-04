@@ -132,7 +132,7 @@ Modes shape what the agent is allowed to do before tools ever run:
 
 - **build** — make changes directly in the workspace
 - **plan** — read-only exploration ending in an implementation plan
-- **research** — read-only investigation and comparisons
+- **research** — investigate and compare; reads freely and can write deliverables (notes, reports, docs)
 - **ask** — explanations only
 
 Modes are independent of the provider: **the mode controls what the agent is allowed to do** (whether it may mutate files), and **you pick the provider/model separately with `/providers` / `/models` in any mode**. One thing to know: whether the model can actually use the file/shell tools depends on the provider/gateway — Mihani Cloud (DeepSeek) does; on the Mihani Pro gateway the models only expose that gateway's own tools, so file/shell edits work in **build** mode on Mihani Cloud, while Mihani Pro is best for reading, explaining, and planning (ask/plan/research).

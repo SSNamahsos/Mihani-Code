@@ -1365,7 +1365,7 @@ func (m *Model) startTurn(prompt string) tea.Cmd {
 		if m.approveAll || cfg.AutoConfirm {
 			return true
 		}
-		if modeName == "plan" || modeName == "research" || modeName == "ask" {
+		if modeName == "plan" || modeName == "ask" {
 			switch name {
 			case "write_file", "edit_file", "delete_file", "bash":
 				m.program.Send(eventMsg(agent.Event{
