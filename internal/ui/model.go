@@ -287,9 +287,6 @@ func New(cfg config.Config, version, resumeID, initialPrompt string) (Model, err
 	if resumeID != "" {
 		if record, e := session.Load(resumeID); e == nil && record.Workspace == root {
 			resumed = m.restore(record)
-			if resumed {
-				m.restoreMode(record.Mode)
-			}
 		}
 	}
 	if resumed {
@@ -305,10 +302,6 @@ func New(cfg config.Config, version, resumeID, initialPrompt string) (Model, err
 		m.input.SetValue(initialPrompt)
 		m.input.Focus()
 	}
-	// Snap provider/model to the current mode so a fresh launch lands on the
-	// right backend (build -> the tool-capable provider, others -> the chat
-	// provider) and a resumed season keeps the provider for its saved mode.
-	m.applyMode()
 	return m, nil
 }
 
@@ -927,12 +920,10 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 
 	case key == "tab":
 		m.modeIndex = (m.modeIndex + 1) % len(modes)
-		m.applyMode()
 		m.notify("mode: " + currentMode(m.modeIndex).name + " · " + m.cfg.ProviderLabel())
 		return m, nil, true
 	case key == "shift+tab":
 		m.modeIndex = (m.modeIndex - 1 + len(modes)) % len(modes)
-		m.applyMode()
 		m.notify("mode: " + currentMode(m.modeIndex).name + " · " + m.cfg.ProviderLabel())
 		return m, nil, true
 
@@ -1021,45 +1012,6 @@ func (m *Model) keyKindOf() string {
 func (m *Model) refreshSpend() {
 	m.spend = usage.WindowSumFor(m.cfg.CurrentProvider, usage.Embedded)
 	m.personalSpend = usage.WindowSumFor(m.cfg.CurrentProvider, usage.Personal)
-}
-
-// restoreMode sets the mode index from a stored mode name without rebinding
-// (the caller applies the provider afterward). Unknown names keep the default.
-func (m *Model) restoreMode(name string) {
-	for i, mo := range modes {
-		if mo.name == name {
-			m.modeIndex = i
-			return
-		}
-	}
-}
-
-// applyMode rebinds the provider (and that provider's remembered model) to the
-// current mode, so file-mutating work lands on the tool-capable provider and
-// read-only chat lands on the provider the mode prefers. It persists the
-// selection and only writes when something actually changed.
-func (m *Model) applyMode() {
-	mode := currentMode(m.modeIndex)
-	if _, ok := m.cfg.Providers[mode.provider]; !ok {
-		return
-	}
-	// Only shuffle between the two Mihani built-ins on a mode change; keep a
-	// deliberately-chosen custom provider (ollama, /connect, ...) untouched.
-	provider := m.cfg.CurrentProvider
-	if m.cfg.IsBuiltinProvider(provider) {
-		provider = mode.provider
-	}
-	model := m.cfg.ModelFor(provider)
-	if model == "" {
-		return
-	}
-	if provider != m.cfg.CurrentProvider || model != m.cfg.CurrentModel {
-		m.cfg.CurrentProvider = provider
-		m.cfg.CurrentModel = model
-		_ = m.cfg.Save()
-	}
-	m.agent.Cfg = m.cfg
-	m.refreshSpend()
 }
 
 // budgetBlock returns a user-facing message when the daily cap is exhausted,

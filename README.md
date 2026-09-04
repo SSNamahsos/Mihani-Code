@@ -135,7 +135,7 @@ Modes shape what the agent is allowed to do before tools ever run:
 - **research** — read-only investigation and comparisons
 - **ask** — explanations only
 
-**Mode → provider routing:** the two built-in providers are used for different jobs. **build** runs on **Mihani Cloud** (whose model can receive and use the file/shell tools); **plan**, **research**, and **ask** run on **Mihani Pro** (Claude, for reading and discussion). Switching modes or providers (`tab`, `/mode`, `/providers`) keeps them in sync both ways, and each provider remembers the model you picked for it. A custom provider you set by hand (e.g. Ollama) is left alone by mode changes.
+Modes are independent of the provider: **the mode controls what the agent is allowed to do** (whether it may mutate files), and **you pick the provider/model separately with `/providers` / `/models` in any mode**. One thing to know: whether the model can actually use the file/shell tools depends on the provider/gateway — Mihani Cloud (DeepSeek) does; on the Mihani Pro gateway the models only expose that gateway's own tools, so file/shell edits work in **build** mode on Mihani Cloud, while Mihani Pro is best for reading, explaining, and planning (ask/plan/research).
 
 Plan, Research, and Ask refuse mutating tools (`write_file`, `edit_file`, `delete_file`, `bash`) without asking the provider to retry them.
 

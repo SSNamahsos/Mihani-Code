@@ -137,8 +137,7 @@ func (m *Model) selectOverlayItem() {
 	case m.overlay == "Modes":
 		if m.overlayIndex < len(modes) {
 			m.modeIndex = m.overlayIndex
-			m.applyMode()
-			m.notify("mode: " + currentMode(m.modeIndex).name + " · " + m.cfg.ProviderLabel())
+			m.notify("mode: " + currentMode(m.modeIndex).name)
 		}
 		m.closeOverlay()
 
@@ -770,15 +769,6 @@ func (m *Model) applyProviderSwitch(name string) {
 	m.cfg.CurrentProvider = name
 	if model := m.cfg.ModelFor(name); model != "" {
 		m.cfg.CurrentModel = model
-	}
-	// Two-way sync: snap the mode to the one bound to this provider, so the
-	// mode pill and the backend agree after a manual provider switch. Custom
-	// providers (not bound to any mode) keep the current mode.
-	for i, mo := range modes {
-		if mo.provider == name {
-			m.modeIndex = i
-			break
-		}
 	}
 	_ = m.cfg.Save()
 	m.agent.Cfg = m.cfg

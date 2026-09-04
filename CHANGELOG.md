@@ -2,6 +2,12 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.23
+
+### Changed
+- **Modes no longer force a provider.** The v0.2.21 mode→provider routing was too rigid — switching to build mode kicked you off your chosen provider. Now the **mode controls behavior** (whether the agent may mutate files) and the **provider is your free choice in any mode**: `tab`/`shift+tab`/`/mode` switch the mode, `/providers` and `/models` set the backend, and they don't fight each other. Each provider still remembers its own model via `/models`.
+- Note: the provider determines whether the model can actually use file/shell tools. Mihani Cloud (DeepSeek) can; on the Mihani Pro gateway the models only expose that gateway's own tools, so file edits work best in **build** mode on Mihani Cloud, and Mihani Pro is best for reading/explaining/planning.
+
 ## v0.2.22
 
 ### Fixed

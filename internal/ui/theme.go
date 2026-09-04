@@ -1,10 +1,6 @@
 package ui
 
-import (
-	"github.com/charmbracelet/lipgloss"
-
-	"github.com/SSNamahsos/Mihani-Code/internal/config"
-)
+import "github.com/charmbracelet/lipgloss"
 
 // Refined dark palette (tokyo-night inspired).
 var (
@@ -25,14 +21,13 @@ type mode struct {
 	name        string
 	description string
 	color       lipgloss.Color
-	provider    string // which provider this mode runs on (tools-aware routing)
 }
 
 var modes = []mode{
-	{name: "build", description: "Make changes directly in your workspace", color: colAmber, provider: config.BuiltinPrimary},
-	{name: "plan", description: "Explore the task and propose an implementation", color: colAccent, provider: config.BuiltinSecondary},
-	{name: "research", description: "Investigate code, docs, and options", color: colPurple, provider: config.BuiltinSecondary},
-	{name: "ask", description: "Get explanations without changing files", color: colGreen, provider: config.BuiltinSecondary},
+	{name: "build", description: "Make changes directly in your workspace", color: colAmber},
+	{name: "plan", description: "Explore the task and propose an implementation", color: colAccent},
+	{name: "research", description: "Investigate code, docs, and options", color: colPurple},
+	{name: "ask", description: "Get explanations without changing files", color: colGreen},
 }
 
 func currentMode(index int) mode { return modes[index%len(modes)] }
