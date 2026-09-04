@@ -1461,9 +1461,14 @@ func (m *Model) finishTurn(x resultMsg) tea.Cmd {
 	case cancelled:
 		m.appendBlock(&block{kind: blockInfo, content: "request cancelled"})
 	default:
-		content := err.Error()
+		// Never surface raw provider/transport detail (endpoint URL, base URL,
+		// HTTP internals) in the error block. Reconnect exhaustion gets a clean,
+		// actionable message; everything else is reduced to its provider-neutral
+		// cause.
+		content := agent.DescribeError(err)
 		if m.lastRetries > 0 {
-			content += fmt.Sprintf("\n(retried %d times with growing delay - the provider kept failing, so token usage went up while reconnecting)", m.lastRetries)
+			content = "The connection to the model dropped " + fmt.Sprintf("%d", m.lastRetries) +
+				" time(s) in a row and kept failing, so I stopped reconnecting (token usage went up while retrying). Check your internet connection and the model, then try again."
 		}
 		m.appendBlock(&block{kind: blockError, content: content})
 	}

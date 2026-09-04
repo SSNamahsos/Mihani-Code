@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"sort"
@@ -238,7 +239,7 @@ func (a *Agent) openAIRequest(ctx context.Context, p config.Provider, useTools b
 	}
 	resp, err := a.client().Do(req)
 	if err != nil {
-		return nil, nil, 0, 0, 0, err
+		return nil, nil, 0, 0, 0, classifyTransportError(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -429,7 +430,7 @@ func (a *Agent) anthropicRequest(ctx context.Context, p config.Provider, mode st
 	req.Header.Set("anthropic-version", "2023-06-01")
 	resp, err := a.client().Do(req)
 	if err != nil {
-		return nil, nil, 0, 0, 0, err
+		return nil, nil, 0, 0, 0, classifyTransportError(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
@@ -739,6 +740,48 @@ type providerHTTPError struct {
 
 func (e *providerHTTPError) Error() string { return e.message }
 
+// providerTransportError is a network-level failure talking to a provider
+// (timeout, connection reset, DNS, ...) as opposed to an HTTP status response.
+// It carries the raw error for internal use but a short, provider-neutral
+// message so the UI never shows the endpoint URL or raw transport detail.
+type providerTransportError struct {
+	kind    string // "timeout" | "network"
+	message string
+	cause   error
+}
+
+func (e *providerTransportError) Error() string { return e.message }
+func (e *providerTransportError) Unwrap() error { return e.cause }
+
+// classifyTransportError turns a raw *url.Error from a provider HTTP call into
+// a provider-neutral error. A cancellation initiated by this request's context
+// is the user interrupting — it passes through untouched so the UI reports a
+// cancel (and does not retry). A provider timeout and any other network failure
+// become retriable transport errors whose messages never expose the endpoint
+// URL or raw transport detail.
+func classifyTransportError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+		return err
+	}
+	if errors.Is(err, context.DeadlineExceeded) ||
+		strings.Contains(err.Error(), "Client.Timeout") ||
+		strings.Contains(err.Error(), "deadline exceeded") {
+		return &providerTransportError{
+			kind:    "timeout",
+			message: "The model took too long to respond, so the request timed out. If this keeps happening the model or its connection may be overloaded — try again or switch provider/model.",
+			cause:   err,
+		}
+	}
+	return &providerTransportError{
+		kind:    "network",
+		message: "Could not reach the model (network error). Check your connection and try again, or switch provider/model.",
+		cause:   err,
+	}
+}
+
 // providerCreditError marks a provider response that says the account budget
 // or credits are exhausted (402, or a 4xx whose body names credits/balance/
 // quota). Never retriable: retrying repeats the same denial; the user must
@@ -779,21 +822,60 @@ func looksLikeCreditExhausted(status int, body string) bool {
 // failures (connection refused, timeout, reset) and server-side responses
 // are; user cancellation and client errors (4xx: auth, model, payload) are
 // not — retrying those just repeats the same failure ten times.
+// DescribeError returns a user-facing, provider-neutral description of a turn
+// failure. It never leaks the endpoint URL, base URL, or raw transport detail.
+func DescribeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.Canceled) {
+		return "request cancelled"
+	}
+	var t *providerTransportError
+	if errors.As(err, &t) {
+		return t.message
+	}
+	var credit *providerCreditError
+	if errors.As(err, &credit) {
+		return credit.message
+	}
+	var pe *providerHTTPError
+	if errors.As(err, &pe) {
+		return pe.message // "provider returned 502 — ..." is safe to show
+	}
+	if errors.Is(err, errEmptyResponse) {
+		return "The model returned an empty response. Try again."
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		if errors.Is(ue.Err, context.Canceled) {
+			return "request cancelled"
+		}
+		return "Could not reach the model (network error). Check your connection and try again, or switch provider/model."
+	}
+	return "Something went wrong while talking to the model. Please try again."
+}
+
 func Retriable(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
+	if errors.Is(err, context.Canceled) {
+		return false // user interrupted the turn
 	}
 	var creditErr *providerCreditError
 	if errors.As(err, &creditErr) {
 		return false // budget denial: retrying repeats the same failure
 	}
+	var transport *providerTransportError
+	if errors.As(err, &transport) {
+		return true // provider timeout / network hiccup: worth retrying
+	}
 	var httpErr *providerHTTPError
 	if errors.As(err, &httpErr) {
 		return httpErr.status == 408 || httpErr.status == 429 || httpErr.status >= 500
 	}
+	// Unknown errors (e.g. a stray deadline from a hung upstream) are retried.
 	return true
 }
 

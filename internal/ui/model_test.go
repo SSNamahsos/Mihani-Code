@@ -861,8 +861,14 @@ func TestErrorBlockStatesRetryCount(t *testing.T) {
 	if b.kind != blockError {
 		t.Fatalf("expected error block, got %v", b.kind)
 	}
-	if !strings.Contains(b.content, "retried 3 times") {
+	if !strings.Contains(b.content, "3 time(s)") {
 		t.Fatalf("error block should state the retry count, got %q", b.content)
+	}
+	if !strings.Contains(b.content, "token usage") {
+		t.Fatalf("error block should explain the token-usage spike, got %q", b.content)
+	}
+	if strings.Contains(b.content, "503") || strings.Contains(b.content, "http") {
+		t.Fatalf("error block should not leak raw provider detail, got %q", b.content)
 	}
 }
 

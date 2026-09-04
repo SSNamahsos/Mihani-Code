@@ -2,6 +2,12 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.25
+
+### Fixed
+- **Reconnection did not kick in on timeouts / network drops.** A provider timeout (`context deadline exceeded` / `Client.Timeout`) and a raw network error were classified as *not* retriable, so the turn just failed with a red error instead of reconnecting. Provider timeouts and network errors are now retried through the reconnect loop (you'll see `reconnecting n/10 · retry in …s`), while a deliberate user cancel (Esc) still stops immediately.
+- **Errors leaked the provider endpoint.** A failed request used to dump the raw Go error — e.g. `Post "https://api.…/v1/chat/completions": context deadline exceeded (Client.Timeout …)` — exposing the provider's URL/host. Error messages are now provider-neutral: a timeout shows “The model took too long to respond…”, a network drop shows “Could not reach the model (network error)…”, and after the reconnect retries are exhausted you get a clean explanation of the dropped connection and token usage — none of it names the provider or shows the link.
+
 ## v0.2.24
 
 ### Fixed
