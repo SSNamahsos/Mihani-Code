@@ -7,42 +7,52 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
 )
 
-// Windows process-creation flags (mirrors golang.org/x/sys/windows) used to
-// detach the self-update helper so it outlives Mihani and the console window.
-const (
-	detachedProcess       = 0x00000008
-	createNewProcessGroup = 0x00000200
-)
+// createNewConsole gives the relaunched copy its own console window, so it does
+// not fight the current process for the terminal while it shuts down.
+const createNewConsole = 0x00000010
 
-// swapBinary installs the downloaded binary over the running exe and relaunches
-// it. A running .exe is locked on Windows, so a detached, console-free
-// PowerShell helper waits for Mihani to exit, swaps the file (retrying for the
-// handle to be released), then launches the new exe in a fresh window. It
-// returns willRestart=true so the UI quits itself, letting the helper run.
+// swapBinary installs the downloaded binary and relaunches it. On Windows a
+// running .exe is opened with FILE_SHARE_DELETE, so it can be renamed while it
+// is still running — no background helper or waiting is needed. Steps:
+//  1. rename the running exe to exe.old (the process keeps running from it)
+//  2. move the downloaded binary into the canonical name
+//  3. delete the old file (best effort, the process is about to quit)
+//  4. open a fresh copy in its own console window
+//
+// It returns willRestart=true when it opened the new copy so the UI quits.
 func swapBinary(exe, tmp, tag string) (string, bool, error) {
-	script := fmt.Sprintf(
-		"$tgt=%d; $exe='%s'; $tmp='%s'; "+
-			"while($true){ $p=Get-Process -Id $tgt -ErrorAction SilentlyContinue; if($null -eq $p){break}; if($p.HasExited){break}; Start-Sleep -Milliseconds 300 }; "+
-			"Start-Sleep -Milliseconds 800; "+
-			"for($i=0;$i -lt 12;$i++){ try{ if(Test-Path $exe){ Remove-Item -Force $exe }; Move-Item -Force $tmp $exe; break } catch { Start-Sleep -Milliseconds 700 } }; "+
-			"Start-Process -FilePath $exe",
-		os.Getpid(), exe, tmp,
-	)
-	cmd := exec.Command("powershell.exe",
-		"-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
-		"-Command", script)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: detachedProcess | createNewProcessGroup,
+	old := exe + ".old"
+	_ = os.Remove(old) // clear a stale swap from a previous session
+
+	if err := os.Rename(exe, old); err != nil {
+		return "", false, fmt.Errorf("could not move the running binary aside: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
-		os.Remove(tmp)
-		return "", false, fmt.Errorf("could not start the update helper (%w) — install from %s", err, HomePage)
+	if err := os.Rename(tmp, exe); err != nil {
+		_ = os.Rename(old, exe) // roll back so the current app still works
+		return "", false, fmt.Errorf("could not install the new binary: %w", err)
 	}
-	if p := cmd.Process; p != nil {
-		_ = p.Release() // do not wait; the helper is detached
+	// The old file is held open by the dying process; retry briefly (it is
+	// opened with FILE_SHARE_DELETE so this normally succeeds).
+	for i := 0; i < 10; i++ {
+		if os.Remove(old) == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
-	return fmt.Sprintf("Updated to %s. Mihani is closing and reopening itself…", tag), true, nil
+
+	if err := startInNewConsole(exe); err != nil {
+		return fmt.Sprintf("Updated to %s. I couldn't open a new window automatically — close Mihani and run it again to finish.", tag), false, nil
+	}
+	return fmt.Sprintf("Updated to %s. Mihani is reopening itself in a new window…", tag), true, nil
+}
+
+// startInNewConsole launches a fresh copy of the (now updated) binary in its
+// own console window. The caller does not wait on it.
+func startInNewConsole(exe string) error {
+	cmd := exec.Command(exe)
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNewConsole}
+	return cmd.Start()
 }

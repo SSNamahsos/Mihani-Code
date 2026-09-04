@@ -8,11 +8,12 @@ import (
 	"strings"
 
 	"github.com/SSNamahsos/Mihani-Code/internal/config"
+	"github.com/SSNamahsos/Mihani-Code/internal/update"
 	"github.com/SSNamahsos/Mihani-Code/internal/ui"
 )
 
 // version is overridden at build time with -ldflags "-X main.version=..."
-var version = "v0.2.21"
+var version = "v0.2.22"
 
 func main() {
 	var (
@@ -35,6 +36,9 @@ func main() {
 		fmt.Println("mihani", version)
 		return
 	}
+
+	// Clear a pre-update binary left behind by an interrupted in-place swap.
+	update.CleanupStale()
 
 	cfg, err := config.Load()
 	if err != nil {

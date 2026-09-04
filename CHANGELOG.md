@@ -2,6 +2,14 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.22
+
+### Fixed
+- **Windows self-update did nothing.** The previous updater spawned a hidden background PowerShell helper to swap the binary after the process exited, but that helper was unreliable (often killed or never ran), so the app said "reopening" and then never actually changed. The updater now does the swap **in-process** — a running Windows `.exe` is opened with `FILE_SHARE_DELETE`, so it can be renamed in place: the current binary is moved aside, the new one is installed in its place, the old file is deleted, and a fresh copy is opened in its own window. No background process, nothing to be killed. A leftover `.old` file from an interrupted update is cleaned up on the next launch.
+
+### Notes
+- This is the update that must be installed **manually once**: the in-app updater running inside v0.2.20/v0.2.21 is the old, broken one, so it cannot fix itself. Run the installer (or download the release) to get v0.2.22; from then on `/update` → `i` closes and reopens Mihani on the new version automatically.
+
 ## v0.2.21
 
 ### Added

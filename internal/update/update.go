@@ -147,6 +147,18 @@ func AssetForURL(r *Release) string {
 	return ""
 }
 
+// CleanupStale removes a leftover <exe>.old file next to the running binary.
+// That file is the pre-update binary during an in-place swap; if a session
+// was hard-killed mid-swap it can remain, so a fresh launch clears it. Best
+// effort and never fatal.
+func CleanupStale() {
+	exe, err := currentBinary()
+	if err != nil {
+		return
+	}
+	_ = os.Remove(exe + ".old")
+}
+
 // OpenURL opens a URL in the system default browser (best effort).
 func OpenURL(u string) error {
 	if u == "" {
