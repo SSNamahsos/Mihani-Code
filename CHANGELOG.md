@@ -2,6 +2,18 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.21
+
+### Added
+- **Mode → provider routing.** Switching modes now binds the right backend automatically, because the two providers are genuinely different: **build** runs on **Mihani Cloud** (its model can actually receive and use the file/shell tools), while **plan / research / ask** run on **Mihani Pro** (Claude for reading and discussion). `tab` / `shift+tab`, `/mode`, and `/providers` all stay in sync (two-way): picking a provider snaps the mode to it, and switching modes picks the provider that mode is bound to. Each provider remembers its own model via `/models`, so coming back to a mode restores the model you had chosen there. A custom provider you picked by hand (e.g. Ollama) is never yanked by a mode change.
+
+### Fixed
+- **Misleading tool-availability behavior.** The agent prompt previously told the model to *never* say a tool was unavailable. On a gateway that does not forward Mihani's file/shell tools (verified on the Mihani Pro gateway, which injects its own web-search/image tools and drops the file tools for its models), that instruction made the model fight its own honest answer. The prompt now tells Mihani to be strictly honest: never claim a read/write/shell happened unless that tool actually returned a result this session, and if a tool is genuinely absent from the session, say so plainly and offer the best alternative instead of pretending.
+
+### Notes
+- File/shell tool access depends on the provider/gateway. Mihani Cloud (DeepSeek-V4-Pro) is verified to run file tools. On the Mihani Pro gateway the Claude models only expose the gateway's own tools, so keep code-changing work in **build** mode (Mihani Cloud) and use **ask/plan/research** on Mihani Pro for reading and discussion.
+- If a provider answers "I have no tools," that is a gateway/key limitation, not a Mihani bug.
+
 ## v0.2.20
 
 ### Fixed

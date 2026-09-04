@@ -62,6 +62,7 @@ type Config struct {
 	Version         int                      `json:"version"`
 	CurrentProvider string                   `json:"current_provider"`
 	CurrentModel    string                   `json:"current_model"`
+	SelectedModels  map[string]string        `json:"selected_models,omitempty"` // per-provider remembered model (provider id -> model)
 	MaxTokens       int                      `json:"max_tokens"`
 	ContextWindow   int                      `json:"context_window,omitempty"`
 	BudgetUSD       float64                  `json:"budget_usd,omitempty"`
@@ -256,6 +257,31 @@ func (c Config) ProviderLabel() string {
 		return p.Label
 	}
 	return "Mihani Code"
+}
+
+// ModelFor returns the last-selected model for a provider, falling back to its
+// first model when none is stored or the stored one is no longer listed.
+func (c Config) ModelFor(providerID string) string {
+	p, ok := c.Providers[providerID]
+	if !ok || len(p.Models) == 0 {
+		return ""
+	}
+	if m, ok := c.SelectedModels[providerID]; ok && containsModel(p.Models, m) {
+		return m
+	}
+	return p.Models[0]
+}
+
+// SetSelectedModel remembers a model choice per provider and, when that
+// provider is the active one, makes it the current model as well.
+func (c *Config) SetSelectedModel(providerID, model string) {
+	if c.SelectedModels == nil {
+		c.SelectedModels = map[string]string{}
+	}
+	c.SelectedModels[providerID] = model
+	if providerID == c.CurrentProvider {
+		c.CurrentModel = model
+	}
 }
 
 func (c Config) Save() error {
