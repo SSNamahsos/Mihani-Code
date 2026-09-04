@@ -6,13 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"syscall"
 	"time"
 )
-
-// createNewConsole gives the relaunched copy its own console window, so it does
-// not fight the current process for the terminal while it shuts down.
-const createNewConsole = 0x00000010
 
 // swapBinary installs the downloaded binary and relaunches it. On Windows a
 // running .exe is opened with FILE_SHARE_DELETE, so it can be renamed while it
@@ -43,16 +38,20 @@ func swapBinary(exe, tmp, tag string) (string, bool, error) {
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	if err := startInNewConsole(exe); err != nil {
+	if err := startNewWindow(exe); err != nil {
 		return fmt.Sprintf("Updated to %s. I couldn't open a new window automatically — close Mihani and run it again to finish.", tag), false, nil
 	}
 	return fmt.Sprintf("Updated to %s. Mihani is reopening itself in a new window…", tag), true, nil
 }
 
-// startInNewConsole launches a fresh copy of the (now updated) binary in its
-// own console window. The caller does not wait on it.
-func startInNewConsole(exe string) error {
-	cmd := exec.Command(exe)
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNewConsole}
+// startNewWindow launches a fresh copy of the (now updated) binary in its own
+// console window. It is a var so tests can stub it out (it normally opens a
+// real console window). It uses `start` (a cmd builtin) rather than the
+// CREATE_NEW_CONSOLE flag: start asks the console host for a brand-new console
+// with fresh input/output, so the new window actually renders. (CREATE_NEW_CONSOLE
+// on a child of a running console process ends up inheriting the dying console's
+// handles and shows a blank/dark window.) The caller does not wait on it.
+var startNewWindow = func(exe string) error {
+	cmd := exec.Command("cmd", "/c", "start", "", exe)
 	return cmd.Start()
 }

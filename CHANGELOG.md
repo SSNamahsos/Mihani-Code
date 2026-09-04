@@ -2,6 +2,14 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.24
+
+### Fixed
+- **The auto-reopen window came up dark/blank.** The updater's relaunch used the `CREATE_NEW_CONSOLE` flag, which (when the parent console process is still winding down) hands the new process the dying console's input/output — so the new window stayed blank and the real output went to the old window. The relaunch now uses `start`, which asks the console host for a brand-new console with fresh input/output, so the reopened window actually renders. The in-place binary swap itself was already working and is unchanged.
+
+### Notes
+- After updating, the original window returns to the prompt and a **new** window opens with the updated Mihani — just close the old one. This v0.2.24 still needs to be installed manually once (the updaters before it are the broken ones); from v0.2.24 on, `/update` → `i` works end to end.
+
 ## v0.2.23
 
 ### Changed
