@@ -2,6 +2,14 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.27
+
+### Fixed
+- **Malformed-tool-call recovery now also covers prompt-based providers** (endpoints with `native_tools: false`, e.g. DeepSeek / longcat via hcnsec). The fix landed in v0.2.26 only covered the native-tool path, so a model that emitted a botched call like `<Longcat_tool_call>…</ask_user>` on a prompt-based endpoint still silently stopped. Both paths now nudge the model to resend the call with valid syntax instead of stopping on a half-call.
+
+### Changed
+- **Read-only modes now hide the file tools instead of merely denying them.** In **ask** and **plan** mode, `write_file`, `edit_file`, `delete_file`, and `bash` are no longer even offered to the model (the other tools — read, search, web, ask_user — remain). This is cleaner than the previous runtime denial: the model simply has no write tools to call. **build** and **research** keep the full tool set, so research can still create deliverables.
+
 ## v0.2.26
 
 ### Fixed

@@ -54,6 +54,7 @@ type Agent struct {
 	mcpTools      []map[string]any
 	tokens        int
 	lastFinish    string // finish_reason of the latest request ("stop", "length", "tool_calls")
+	mode          string // current mode for this turn (build/plan/research/ask), used for tool gating
 	lengthNudges  int    // per-turn continuation nudges after a "length" finish
 	proseNudges   int    // per-turn nudges when the model dumps file content as text
 	botchedNudges int    // per-turn nudges when a tool call was botched (unparseable)
@@ -89,6 +90,7 @@ func (a *Agent) Send(ctx context.Context, prompt, mode string, approve func(stri
 	}
 	pricing.SetOverrides(a.Cfg.Pricing)
 	a.tokens += estimateTokens(prompt)
+	a.mode = strings.ToLower(mode)
 	a.lengthNudges = 0 // continuation budget is per turn
 	a.proseNudges = 0  // prose-dump nudge budget is per turn
 	a.botchedNudges = 0 // botched-tool-call nudge budget is per turn
@@ -1051,6 +1053,9 @@ func workspaceContext(root string) string {
 func (a *Agent) openAITools() []map[string]any {
 	result := []map[string]any{}
 	for _, tool := range tools.Registry {
+		if a.hidesTool(tool.Name) {
+			continue
+		}
 		result = append(result, map[string]any{"type": "function", "function": map[string]any{"name": tool.Name, "description": tool.Description, "parameters": tool.Schema}})
 	}
 	for _, tool := range a.mcpTools {
@@ -1062,8 +1067,26 @@ func (a *Agent) openAITools() []map[string]any {
 func (a *Agent) anthropicTools() []map[string]any {
 	result := []map[string]any{}
 	for _, tool := range tools.Registry {
+		if a.hidesTool(tool.Name) {
+			continue
+		}
 		result = append(result, map[string]any{"name": tool.Name, "description": tool.Description, "input_schema": tool.Schema})
 	}
 	result = append(result, a.mcpTools...)
 	return result
+}
+
+// hidesTool reports whether a tool is hidden from the model in the current
+// mode. Read-only modes (ask, plan) hide the file/shell tools so the model
+// cannot even be offered write_file/edit_file/delete_file/bash; build and
+// research keep the full tool set (research may write deliverables).
+func (a *Agent) hidesTool(name string) bool {
+	if a.mode != "ask" && a.mode != "plan" {
+		return false
+	}
+	switch name {
+	case "write_file", "edit_file", "delete_file", "bash":
+		return true
+	}
+	return false
 }

@@ -53,3 +53,62 @@ func TestResearchModeAllowsWriting(t *testing.T) {
 		t.Fatal("research mode still forbids modifying files")
 	}
 }
+
+// Read-only modes (ask, plan) must hide the file/shell tools from the model;
+// build and research keep the full set. Verified across the native, anthropic,
+// and prompt-based tool listings.
+func TestModeGatesFileTools(t *testing.T) {
+	fileTools := []string{"write_file", "edit_file", "delete_file", "bash"}
+	has := func(list []map[string]any, name string) bool {
+		for _, m := range list {
+			if n, _ := m["name"].(string); n == name {
+				return true
+			}
+			if f, ok := m["function"].(map[string]any); ok {
+				if n, _ := f["name"].(string); n == name {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	hasEntry := func(a *Agent, name string) bool {
+		for _, e := range toolEntries(a) {
+			if e.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, ro := range []string{"ask", "plan"} {
+		a := &Agent{mode: ro}
+		for _, ft := range fileTools {
+			if !a.hidesTool(ft) {
+				t.Fatalf("mode %s should hide %s", ro, ft)
+			}
+			if has(a.openAITools(), ft) || has(a.anthropicTools(), ft) || hasEntry(a, ft) {
+				t.Fatalf("mode %s still lists %s in the tool set", ro, ft)
+			}
+		}
+		// Non-file tools stay available.
+		if a.hidesTool("read_file") || a.hidesTool("ask_user") || a.hidesTool("web_search") {
+			t.Fatalf("mode %s must keep read/search/ask tools", ro)
+		}
+		if !has(a.openAITools(), "read_file") || !hasEntry(a, "read_file") {
+			t.Fatalf("mode %s should still list read_file", ro)
+		}
+	}
+
+	for _, writable := range []string{"build", "research"} {
+		a := &Agent{mode: writable}
+		for _, ft := range fileTools {
+			if a.hidesTool(ft) {
+				t.Fatalf("mode %s should NOT hide %s", writable, ft)
+			}
+			if !has(a.openAITools(), ft) || !hasEntry(a, ft) {
+				t.Fatalf("mode %s should list %s", writable, ft)
+			}
+		}
+	}
+}

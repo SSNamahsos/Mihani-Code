@@ -55,6 +55,9 @@ type namedTool struct {
 func toolEntries(a *Agent) []namedTool {
 	out := make([]namedTool, 0, len(tools.Registry)+len(a.mcpTools))
 	for _, t := range tools.Registry {
+		if a != nil && a.hidesTool(t.Name) {
+			continue
+		}
 		out = append(out, namedTool{Name: t.Name, Description: t.Description, Schema: t.Schema})
 	}
 	for _, t := range a.mcpTools {
@@ -100,6 +103,19 @@ func toolNames() string {
 		names = append(names, t.Name)
 	}
 	return strings.Join(names, ", ")
+}
+
+// botchedCallNudge is the corrective message sent when a model emits a tool
+// call Mihani can't parse (wrong tag, malformed JSON). The tag strings are
+// assembled at runtime. It tells the model the exact required format and lists
+// the available tools.
+func botchedCallNudge() string {
+	tag := "<" + "tool_call>"
+	end := "</" + "tool_call>"
+	return "Your previous reply tried to call a tool but did not use the required format, so it was not executed. " +
+		"To call a tool, end your reply with exactly one block of the form: " +
+		tag + `{"name": "tool_name", "arguments": {...}}` + end + " (valid JSON on one line). " +
+		"Available tools: " + toolNames() + ". Please resend the tool call using that exact format. If the task is actually done, simply answer in plain text with no tool_call block."
 }
 
 // knownToolNames returns the available tool names as a slice.
@@ -263,6 +279,18 @@ func (a *Agent) sendPromptBased(ctx context.Context, p config.Provider, prompt, 
 					map[string]any{"role": "user", "content": fmt.Sprintf(
 						"<tool_result status=\"error\">your tool call could not be parsed: %s\nYou wrote:\n%s\n%s</tool_result>",
 						parseErr, clip(content, 400), hint)})
+				continue
+			}
+			// An aliased tool-call tag (<Longcat_tool_call>...<ask_user>) has no
+			// standard block to parse, so parseErr is nil here. Catch it too so
+			// the turn gets a corrective nudge instead of silently ending with a
+			// half-call shown to the user (bounded so it never loops).
+			if !whitespaceOnly.MatchString(content) && looksLikeBotchedToolCall(content) && a.botchedNudges < 3 {
+				a.botchedNudges++
+				a.history = append(a.history,
+					map[string]any{"role": "assistant", "content": content},
+					map[string]any{"role": "user", "content": botchedCallNudge()})
+				emit(Event{Kind: "activity", Text: "nudging: resend tool call with valid syntax"})
 				continue
 			}
 			emit(Event{Kind: "done", Done: true})
