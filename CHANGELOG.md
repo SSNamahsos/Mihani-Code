@@ -2,6 +2,16 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.28
+
+### Added
+- **Key-protecting gateway** (`gateway/`, separate Go module) to stop shipping the built-in providers' upstream API keys inside the distributed binary. It is an OpenAI-compatible pass-through: `/pro/…` and `/cloud/…` forward to the Mihani Pro / Cloud upstreams, authenticating the client with a token you issue and swapping it for the real upstream key server-side. Streams SSE verbatim, rate-limits per IP, caps concurrency, and returns `401` on a bad token. Design in `docs/gateway.md`; rotation + deployment in `docs/gateway-deploy.md`.
+- **Opt-in client support for the gateway.** When `MIHANI_GATEWAY` is set, the built-in Pro/Cloud providers route through the gateway (Pro → `<gw>/pro/v1`, Cloud → `<gw>/cloud/v1`) and present `MIHANI_GATEWAY_TOKEN` as the client token. **Default is unchanged** — nothing routes through the gateway unless you set that env var, so no existing install is affected.
+
+### Notes
+- The gateway holds the upstream keys; the client only ever sends a revocable client token. To actually protect the keys: rotate the ones that shipped in old binaries, deploy the gateway, point the client at it, then stop embedding keys in release builds. Existing already-distributed binaries still contain the old keys, which is why rotation is required.
+- Verified live: the gateway routed `/pro/models` (seekai) and `/cloud/models` (hcnsec) and rejected a bad token with `401`.
+
 ## v0.2.27
 
 ### Fixed

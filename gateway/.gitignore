@@ -1,0 +1,15 @@
+# Secrets and local config — NEVER commit real keys/tokens.
+.env
+.env.local
+*.local
+*.env
+
+# built binary
+/gateway
+/gateway.exe
+mihani-gateway
+mihani-gateway.exe
+
+# local dev notes (client token, etc.)
+client_token.txt
+*.txt.note
