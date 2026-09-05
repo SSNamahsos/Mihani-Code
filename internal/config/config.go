@@ -164,6 +164,22 @@ func Load() (Config, error) {
 	return c, nil
 }
 
+// applyGatewayOverride routes the built-in providers through a
+// key-protecting gateway. The gateway holds the upstream API keys
+// server-side; the client only presents a client token, so the upstream keys
+// never ship in the binary.
+//
+// A default gateway is shipped so built-in providers work out of the box.
+// To use your own gateway, set MIHANI_GATEWAY (and optionally
+// MIHANI_GATEWAY_TOKEN if your worker uses a different client token).
+const (
+	// defaultGateway is the shipped, key-protecting worker that fronts the
+	// built-in providers. It holds the real upstream API keys; clients only
+	// ever present defaultGatewayToken.
+	defaultGateway     = "https://mihani-gw.namahsos1387.workers.dev"
+	defaultGatewayToken = "30ef0d1a8653bd9754e49c5fdb5724640384540da9b8bcaf5d408a4c6691c9a0"
+)
+
 // applyGatewayOverride routes the built-in providers through a user-deployed
 // key-protecting gateway when MIHANI_GATEWAY is set. The gateway holds the
 // upstream API keys server-side; the client only presents a client token, so
@@ -174,10 +190,11 @@ func Load() (Config, error) {
 //	                    CLIENT_TOKENS entry)
 func applyGatewayOverride(c *Config) {
 	gw := strings.TrimSpace(os.Getenv("MIHANI_GATEWAY"))
-	if gw == "" {
-		return
-	}
 	token := strings.TrimSpace(os.Getenv("MIHANI_GATEWAY_TOKEN"))
+	if gw == "" {
+		gw = defaultGateway
+		token = defaultGatewayToken
+	}
 	gw = strings.TrimRight(gw, "/")
 	routes := map[string]string{
 		BuiltinPrimary:   "cloud",

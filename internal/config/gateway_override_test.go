@@ -5,19 +5,25 @@ import (
 )
 
 // applyGatewayOverride must re-point the two built-ins at the gateway and set a
-// client token, and must be a no-op when MIHANI_GATEWAY is unset.
+// client token. When MIHANI_GATEWAY is unset, the shipped default gateway is
+// used so built-in providers work out of the box.
 func TestApplyGatewayOverride(t *testing.T) {
-	// Unset: no change.
+	// Unset: defaults to the shipped gateway.
 	t.Setenv("MIHANI_GATEWAY", "")
 	t.Setenv("MIHANI_GATEWAY_TOKEN", "")
 	c := defaults()
-	proBefore := c.Providers[BuiltinSecondary].BaseURL
 	applyGatewayOverride(&c)
-	if c.Providers[BuiltinSecondary].BaseURL != proBefore {
-		t.Fatal("override must be a no-op when MIHANI_GATEWAY is unset")
+	if got := c.Providers[BuiltinPrimary].BaseURL; got != defaultGateway+"/cloud/v1" {
+		t.Fatalf("cloud base = %q, want %q", got, defaultGateway+"/cloud/v1")
+	}
+	if got := c.Providers[BuiltinSecondary].BaseURL; got != defaultGateway+"/pro/v1" {
+		t.Fatalf("pro base = %q, want %q", got, defaultGateway+"/pro/v1")
+	}
+	if got := c.Key(BuiltinSecondary); got != defaultGatewayToken {
+		t.Fatalf("pro key should be the default client token, got %q", got)
 	}
 
-	// Set: both built-ins point at the gateway with the client token.
+	// Set explicitly: both built-ins point at the custom gateway with the client token.
 	t.Setenv("MIHANI_GATEWAY", "https://gw.example.com/")
 	t.Setenv("MIHANI_GATEWAY_TOKEN", "client-tok")
 	c = defaults()
