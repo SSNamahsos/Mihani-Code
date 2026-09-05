@@ -160,7 +160,40 @@ func Load() (Config, error) {
 	if c.BudgetUSD == 0 {
 		c.BudgetUSD = DefaultDailyBudgetUSD
 	}
+	applyGatewayOverride(&c)
 	return c, nil
+}
+
+// applyGatewayOverride routes the built-in providers through a user-deployed
+// key-protecting gateway when MIHANI_GATEWAY is set. The gateway holds the
+// upstream API keys server-side; the client only presents a client token, so
+// the upstream keys never ship in the binary. No-op when the env var is unset.
+//
+//	MIHANI_GATEWAY        e.g. https://gw.example.com
+//	MIHANI_GATEWAY_TOKEN  client token the gateway accepts (matches a server
+//	                    CLIENT_TOKENS entry)
+func applyGatewayOverride(c *Config) {
+	gw := strings.TrimSpace(os.Getenv("MIHANI_GATEWAY"))
+	if gw == "" {
+		return
+	}
+	token := strings.TrimSpace(os.Getenv("MIHANI_GATEWAY_TOKEN"))
+	gw = strings.TrimRight(gw, "/")
+	routes := map[string]string{
+		BuiltinPrimary:   "cloud",
+		BuiltinSecondary: "pro",
+	}
+	for name, route := range routes {
+		p, ok := c.Providers[name]
+		if !ok {
+			continue
+		}
+		p.BaseURL = gw + "/" + route + "/v1"
+		if token != "" {
+			p.APIKey = token
+		}
+		c.Providers[name] = p
+	}
 }
 
 // migrateBuiltins injects the shipped endpoints, removes ids from earlier

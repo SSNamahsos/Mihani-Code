@@ -237,14 +237,18 @@ The config file lives at `~/.mihani/config.json` after your first change and sup
 
 ### Key-protecting gateway
 
-To keep the built-in providers' upstream API keys out of the distributed binary, deploy the key-protecting proxy in `gateway/`. It sits between the client and the providers, holds the real keys server-side, and authenticates the client with a token you issue. Point the client at it (opt-in; default is unchanged) with:
+To keep the built-in providers' upstream API keys out of the distributed binary, deploy the key-protecting proxy. **Easiest path: Cloudflare Worker (free, no payment required).** See `gateway-worker/` — one `index.js` file, deploy with `wrangler deploy`, set your secrets in the Cloudflare Dashboard, done.
+
+Alternatively there is a Go standalone gateway (`gateway/`) for VPS / Fly.io deployments if you prefer that.
+
+The worker holds the real keys server-side; the client only presents a token you issue. Point the client at it (opt-in; default is unchanged):
 
 ```sh
-export MIHANI_GATEWAY=https://<your-gateway>
-export MIHANI_GATEWAY_TOKEN=<client-token>
+export MIHANI_GATEWAY=https://mihani-gw.<your-subdomain>.workers.dev
+export MIHANI_GATEWAY_TOKEN=<your-client-token>
 ```
 
-`/pro/…` and `/cloud/…` forward to the Mihani Pro and Cloud upstreams respectively, streaming responses back verbatim. See `docs/gateway.md` for the design and `docs/gateway-deploy.md` for rotation + deployment. **Do not ship a default that uses the gateway until it is deployed and the embedded keys have been retired and rotated.**
+`/pro/…` and `/cloud/…` forward to the Mihani Pro and Cloud upstreams respectively, streaming responses back verbatim. See `docs/gateway.md` for the design and `gateway-worker/DEPLOY.md` for the Cloudflare Worker instructions. **Do not ship a default that uses the gateway until it is deployed and the embedded keys have been retired and rotated.**
 
 ## Skills and MCP
 

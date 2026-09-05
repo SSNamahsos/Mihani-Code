@@ -10,3 +10,7 @@ internal/secrets/blob.bin
 default ai's.txt
 tui-out.txt
 tui-err.txt
+*.stdin
+
+# Wrangler cache (contains account metadata)
+gateway-worker/.wrangler/

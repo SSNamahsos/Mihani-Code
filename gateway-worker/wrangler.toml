@@ -1,0 +1,12 @@
+name = "mihani-gw"
+main = "index.js"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# Fill these in before deploy (or set them as environment variables in the
+# Cloudflare Dashboard under Workers → Settings → Environment Variables):
+PRO_BASE = "https://seekai.cc/v1"
+CLOUD_BASE = "https://api.hcnsec.cn/v1"
+
+CLIENT_TOKENS = "<your-client-token>"
