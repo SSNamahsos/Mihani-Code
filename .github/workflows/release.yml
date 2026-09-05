@@ -28,22 +28,9 @@ jobs:
         with:
           go-version: "1.24"
 
-      # Optional embedded credentials: add a repository secret named BLOB
-      # containing base64(internal/secrets/blob.bin). Without it the binaries
-      # build from the committed placeholder (no credentials inside).
-      - name: Restore credential blob (if provided)
-        if: env.BLOB != ''
-        env:
-          BLOB: ${{ secrets.BLOB }}
-        run: |
-          printf '%s' "$BLOB" | tr -d '[:space:]' | base64 -d > internal/secrets/blob.bin
-          BYTES=$(wc -c < internal/secrets/blob.bin)
-          echo "decoded credential blob: ${BYTES} bytes"
-          if [ ! -s internal/secrets/blob.bin ]; then
-            echo "::error::BLOB secret decoded to an empty file — re-check how it was generated"
-            exit 1
-          fi
-
+      # Build from the committed placeholder (no embedded credentials).
+      # To use the built-in providers, deploy the key-protecting gateway
+      # (gateway-worker/) and point the client at it via MIHANI_GATEWAY.
       - name: Build
         run: go build -trimpath -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o mihani-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} ./cmd/mihani
 

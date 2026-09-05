@@ -1,15 +1,14 @@
-// Package secrets holds provider API keys out of the source tree and provides
-// a universal redactor so secret values can never reach tool output, the
-// transcript, or persisted files.
+// Package secrets redacts provider API keys from tool output, the
+// transcript, and persisted files — so credentials can never leak to the
+// model, the user, or disk.
 //
-// Credentials live in internal/secrets/blob.bin (git-ignored). Each line is a
-// hex string XOR-encoded with the in-code mask; blob.example.bin is the
-// committed placeholder for source-only builds. This keeps real keys out of
-// version control while shipping them inside distributed binaries.
+// For local development only: drop a git-ignored blob.bin with
+// XOR-masked hex entries (see secrets.go). The committed placeholder is
+// empty, so distributed binaries build with NO embedded credentials.
 //
-// Keys are never written to config.json, never exported to environment
-// variables, and every string that flows back from a tool is passed through
-// Redact before the model or UI sees it.
+// To use the built-in providers without embedded keys, deploy the
+// key-protecting gateway (gateway-worker/) and point the client at it
+// via MIHANI_GATEWAY.
 package secrets
 
 import (
