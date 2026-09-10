@@ -4,4 +4,4 @@ compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 
 # All secrets are set via `wrangler secret put` or Cloudflare Dashboard.
-# Nothing here is sensitive.
+# Nothing sensitive is stored here.

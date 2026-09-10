@@ -31,6 +31,8 @@ var defaultRates = []struct {
 	{"qwen", Rate{Input: 0.40, Output: 1.60}},
 	{"step", Rate{Input: 0.30, Output: 1.20}},
 	{"sensenova", Rate{Input: 0.30, Output: 1.20}},
+	{"kimi", Rate{Input: 0.60, Output: 2.50}},
+	{"spark", Rate{Input: 0.20, Output: 0.80}},
 	{"mimo", Rate{Input: 0.00, Output: 0.00}}, // free tier model
 	{"claude-opus", Rate{Input: 15.00, Output: 75.00}},
 	{"claude-sonnet", Rate{Input: 3.00, Output: 15.00}},

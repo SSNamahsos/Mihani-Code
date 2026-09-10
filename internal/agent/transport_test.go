@@ -13,7 +13,7 @@ import (
 func providerTimeoutErr() error {
 	return &url.Error{
 		Op:  "Post",
-		URL: "https://api.hcnsec.cn/v1/chat/completions",
+		URL: "https://api.test-upstream.invalid/v1/chat/completions",
 		Err: context.DeadlineExceeded,
 	}
 }
@@ -34,7 +34,7 @@ func TestClassifyProviderTimeoutIsRetriable(t *testing.T) {
 	}
 	// The message shown to the user must not leak the endpoint or URL.
 	msg := DescribeError(got)
-	for _, bad := range []string{"http", "hcnsec", "api.", "//"} {
+	for _, bad := range []string{"http", "test-upstream", "invalid", "//"} {
 		if strings.Contains(strings.ToLower(msg), bad) {
 			t.Fatalf("timeout message leaks endpoint detail: %q", msg)
 		}
@@ -57,16 +57,16 @@ func TestClassifyUserCancelIsNotRetriable(t *testing.T) {
 func TestDescribeErrorNeverLeaksURL(t *testing.T) {
 	cases := []error{
 		providerTimeoutErr(),
-		&url.Error{Op: "Post", URL: "https://seekai.cc/v1/chat/completions", Err: errors.New("connection refused")},
-		&url.Error{Op: "Post", URL: "https://seekai.cc/v1/chat/completions", Err: errors.New("dial tcp: lookup: no such host")},
-		errors.New(`Post "https://api.hcnsec.cn/v1/chat/completions": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`),
+		&url.Error{Op: "Post", URL: "https://test-pro.invalid/v1/chat/completions", Err: errors.New("connection refused")},
+		&url.Error{Op: "Post", URL: "https://test-pro.invalid/v1/chat/completions", Err: errors.New("dial tcp: lookup: no such host")},
+		errors.New(`Post "https://api.test-upstream.invalid/v1/chat/completions": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`),
 	}
 	for _, err := range cases {
 		msg := DescribeError(err)
 		if msg == "" {
 			t.Fatalf("empty description for %v", err)
 		}
-		if strings.Contains(msg, "hcnsec") || strings.Contains(msg, "seekai") || strings.Contains(msg, "api.") || strings.Contains(msg, "://") || strings.Contains(msg, "chat/completions") {
+		if strings.Contains(msg, "test-upstream") || strings.Contains(msg, "test-pro") || strings.Contains(msg, "invalid") || strings.Contains(msg, "://") || strings.Contains(msg, "chat/completions") {
 			t.Fatalf("DescribeError leaks endpoint detail: %q", msg)
 		}
 		if !Retriable(err) {

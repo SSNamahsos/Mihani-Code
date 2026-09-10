@@ -65,8 +65,12 @@ async function proxy(req, upstreamBase, apiKey) {
   const outHeaders = new Headers();
   outHeaders.set("Content-Type", ct);
   outHeaders.set("Cache-Control", "no-store");
-  const text = await resp.text();
-  return new Response(text, { status: resp.status, headers: outHeaders });
+  // Stream the body through untouched. Buffering with `await resp.text()`
+  // (the old behavior) held the whole SSE stream until upstream finished,
+  // so the client saw zero bytes during long generations and Cloudflare's
+  // ~100s no-response window killed the request — streaming replies died
+  // even though the model was still working.
+  return new Response(resp.body, { status: resp.status, headers: outHeaders });
 }
 
 export default {

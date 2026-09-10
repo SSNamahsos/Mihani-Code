@@ -13,7 +13,7 @@ import (
 )
 
 // version is overridden at build time with -ldflags "-X main.version=..."
-var version = "v0.2.28"
+var version = "v0.2.29"
 
 func main() {
 	var (
@@ -49,6 +49,16 @@ func main() {
 			fail(fmt.Errorf("unknown provider %q — try /providers inside mihani", *provider))
 		}
 		cfg.CurrentProvider = *provider
+		if *model == "" {
+			// Follow the provider: keep the current model only when the new
+			// provider actually offers it, otherwise use that provider's own
+			// selection. Without this, `-provider mihani` after using Mihani
+			// Pro still sent the Pro model to the Cloud endpoint and every
+			// turn died with model_not_found.
+			if m := cfg.ModelFor(*provider); m != "" {
+				cfg.CurrentModel = m
+			}
+		}
 	}
 	if *model != "" {
 		cfg.CurrentModel = *model

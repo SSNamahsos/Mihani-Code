@@ -190,8 +190,15 @@ func (m *Model) selectOverlayItem() {
 			}
 			m.relayout()
 		} else {
-			m.closeOverlay()
+		m.closeOverlay()
+	}
+
+	case m.overlay == "Export conversation":
+		if m.overlayIndex < 3 {
+			formats := []string{"markdown", "json", "text"}
+			m.applyExport(formats[m.overlayIndex])
 		}
+		m.closeOverlay()
 
 	case m.overlay == "Settings":
 		if m.overlayIndex < len(m.overlayItems) {
@@ -490,6 +497,23 @@ func (m *Model) command(s string) tea.Cmd {
 			return cmd
 		}
 
+	case "/init":
+		// opencode-style project bootstrap: run a build-mode turn that
+		// analyzes the repo and writes .mihani.md project instructions.
+		if m.busy {
+			m.notify("wait for the current turn to finish")
+			return nil
+		}
+		m.modeIndex = 0 // build: /init must be allowed to write the file
+		return m.startTurn("Analyze this project and create (or update) the .mihani.md file in the workspace root so future sessions know how to work here. " +
+			"Inspect the directory layout, README, manifest/build files, and tests first. The file should contain: " +
+			"(1) a short overview of what the project is, (2) build / test / lint commands that actually work here, " +
+			"(3) the key directories and their purpose, (4) code style and conventions worth following. " +
+			"Keep it under 60 lines. If .mihani.md already exists, use edit_file to improve it instead of rewriting it from scratch.")
+
+	case "/export":
+		m.openExportMenu()
+
 	case "/settings":
 		m.openOverlay("Settings", m.settingsItems())
 
@@ -578,6 +602,15 @@ func (m *Model) openEffortMenu() {
 		items = append(items, overlayItem{label: mark + " " + level, detail: detail})
 	}
 	m.openOverlay("Effort · "+model, items)
+}
+
+// openExportMenu offers export formats for the current conversation.
+func (m *Model) openExportMenu() {
+	m.openOverlay("Export conversation", []overlayItem{
+		{label: "Markdown", detail: "human-readable transcript with code fences"},
+		{label: "JSON", detail: "machine-readable, full message history"},
+		{label: "Plain text", detail: "strip formatting, just the text"},
+	})
 }
 
 // setEffort stores a per-model effort level for the active provider and

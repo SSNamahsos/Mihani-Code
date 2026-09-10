@@ -2,19 +2,21 @@ package ui
 
 import "github.com/charmbracelet/lipgloss"
 
-// Refined dark palette (tokyo-night inspired).
+// Dark palette mirroring opencode's signature look: near-black neutral grays
+// with a soft peach-orange primary accent.
 var (
-	colAccent = lipgloss.Color("#7aa2f7")
-	colText   = lipgloss.Color("#c0caf5")
-	colBright = lipgloss.Color("#e6ecfd")
-	colDim    = lipgloss.Color("#565f89")
-	colFaint  = lipgloss.Color("#3b4261")
-	colBorder = lipgloss.Color("#2a3150")
-	colGreen  = lipgloss.Color("#9ece6a")
-	colRed    = lipgloss.Color("#f7768e")
-	colAmber  = lipgloss.Color("#e0af68")
-	colPurple = lipgloss.Color("#bb9af7")
-	colCyan   = lipgloss.Color("#7dcfff")
+	colAccent = lipgloss.Color("#fab283") // primary — opencode peach orange
+	colBlue   = lipgloss.Color("#5c9cf5") // secondary
+	colText   = lipgloss.Color("#eeeeee")
+	colBright = lipgloss.Color("#ffffff")
+	colDim    = lipgloss.Color("#808080") // textMuted
+	colFaint  = lipgloss.Color("#606060") // borderActive gray
+	colBorder = lipgloss.Color("#3c3c3c") // borderSubtle
+	colGreen  = lipgloss.Color("#7fd88f")
+	colRed    = lipgloss.Color("#e06c75")
+	colAmber  = lipgloss.Color("#f5a742")
+	colPurple = lipgloss.Color("#9d7cd8")
+	colCyan   = lipgloss.Color("#56b6c2")
 )
 
 type mode struct {
@@ -25,7 +27,7 @@ type mode struct {
 
 var modes = []mode{
 	{name: "build", description: "Make changes directly in your workspace", color: colAmber},
-	{name: "plan", description: "Explore the task and propose an implementation", color: colAccent},
+	{name: "plan", description: "Explore the task and propose an implementation", color: colBlue},
 	{name: "research", description: "Investigate code, docs, and options", color: colPurple},
 	{name: "ask", description: "Get explanations without changing files", color: colGreen},
 }

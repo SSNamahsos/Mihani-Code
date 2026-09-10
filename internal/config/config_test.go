@@ -64,8 +64,8 @@ func TestBuiltinsUseNeutralBranding(t *testing.T) {
 func TestDefaultsContainShippedModels(t *testing.T) {
 	cfg := defaults()
 	want := map[string][]string{
-		BuiltinPrimary:   {"DeepSeek-V4-Pro", "Qwen3.8-27B", "step-3.7-flash", "sensenova-6.8-flash-lite", "MiniMax-M3"},
-		BuiltinSecondary: {"claude-opus-5", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5"},
+		BuiltinPrimary:   {"DeepSeek-V4-Pro", "step-3.7-flash", "glm-5.3-flash", "sensenova-6.8-flash-lite", "spark-x2.5"},
+		BuiltinSecondary: {"step-router-v1", "step-explore", "Qwen3.6-35B-A3B", "spark-x2.5", "kimi-k3"},
 	}
 	for id, models := range want {
 		got := cfg.Providers[id].Models
@@ -136,8 +136,11 @@ func TestLoadRenamesLegacyEndpointIDs(t *testing.T) {
 	if cfg.CurrentProvider != BuiltinSecondary {
 		t.Fatalf("seekai was not renamed to %s: %q", BuiltinSecondary, cfg.CurrentProvider)
 	}
-	if cfg.CurrentModel != "claude-opus-5" {
-		t.Fatalf("valid current model should survive migration: %q", cfg.CurrentModel)
+	// claude-opus-5 no longer exists upstream (no channel for it), so the
+	// migration must reset the selection to the provider's shipped lineup
+	// instead of leaving the user on a model that fails every turn.
+	if cfg.CurrentModel != cfg.Providers[BuiltinSecondary].Models[0] {
+		t.Fatalf("removed model should reset to the provider's first model, got %q", cfg.CurrentModel)
 	}
 	for _, legacyID := range []string{"hcnsec", "seekai"} {
 		if _, exists := cfg.Providers[legacyID]; exists {

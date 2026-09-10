@@ -129,7 +129,7 @@ func (m *Model) View() string {
 }
 
 func (m *Model) headerRow() string {
-	logo := lipgloss.NewStyle().Bold(true).Foreground(colAccent).Render("◆ mihani")
+	logo := lipgloss.NewStyle().Bold(true).Foreground(colAccent).Render("⯈ mihani")
 	version := lipgloss.NewStyle().Foreground(colFaint).Render(" " + m.version)
 	if m.updateReady() {
 		version += lipgloss.NewStyle().Foreground(colAmber).Render(" · ⟳ " + m.updateLatest.Tag)
@@ -197,8 +197,9 @@ func (m *Model) statusRow() string {
 		window = 200_000
 	}
 	pct := float64(m.tokens) / float64(window) * 100
-	right := fmt.Sprintf("%s · %sk tokens (%.0f%%) · %s",
-		shortPath(m.root), formatK(m.tokens), pct, m.status)
+	ctxBar := contextBar(pct)
+	right := fmt.Sprintf("%s · %s · %sk tokens (%.0f%%) · %s",
+		shortPath(m.root), ctxBar, formatK(m.tokens), pct, m.status)
 	spendPart := m.spendLabel()
 	if spendPart != "" {
 		right = spendPart + " · " + right
@@ -269,6 +270,29 @@ func shortPath(path string) string {
 	return path
 }
 
+// contextBar renders a visual context-usage indicator that changes color
+// as the session fills the provider's context window. Green < 50%, yellow
+// 50-80%, red > 80%.
+func contextBar(pct float64) string {
+	filled := int(pct / 10)
+	if filled > 10 {
+		filled = 10
+	}
+	empty := 10 - filled
+	var color lipgloss.Color
+	switch {
+	case pct >= 80:
+		color = colRed
+	case pct >= 50:
+		color = colAmber
+	default:
+		color = colGreen
+	}
+	bar := lipgloss.NewStyle().Foreground(color).Render("█")
+	blank := lipgloss.NewStyle().Foreground(colDim).Render("░")
+	return bar + strings.Repeat("█", maxInt(0, filled-1)) + strings.Repeat(blank, empty)
+}
+
 func (m *Model) commandPalette() string {
 	items := m.filteredCommands()
 	rows := make([]string, 0, len(items))
@@ -302,7 +326,7 @@ func (m *Model) commandPalette() string {
 
 func (m *Model) welcome() string {
 	mode := currentMode(m.modeIndex)
-	logo := lipgloss.NewStyle().Bold(true).Foreground(colAccent).Render("◆ Mihani Code") +
+	logo := lipgloss.NewStyle().Bold(true).Foreground(colAccent).Render("⯈ Mihani Code") +
 		lipgloss.NewStyle().Foreground(colFaint).Render("  "+m.version)
 
 	// Home page: this launch is a brand-new conversation (season).

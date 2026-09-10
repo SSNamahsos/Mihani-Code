@@ -2,7 +2,8 @@ package agent
 
 import (
 	"context"
-		"fmt"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,7 +31,7 @@ func TestCreditExhaustionNotRetriable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	err = providerError(resp)
+	err = providerError(resp, "test-model")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -39,6 +40,43 @@ func TestCreditExhaustionNotRetriable(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Reset usage window") {
 		t.Fatalf("credit error should point at the fix, got: %v", err)
+	}
+}
+
+// A model the upstream does not serve (New-API distributors answer
+// "No available channel for model X" with 503) must fail fast: the reconnect
+// loop can never fix it, and ten minutes of retries is the exact bug users
+// saw as "the model has no tools".
+func TestMissingModelFailsFast(t *testing.T) {
+	if Retriable(&providerModelError{message: "x"}) {
+		t.Fatal("a missing model must not be retriable")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(503)
+		fmt.Fprint(w, `{"error":{"code":"model_not_found","message":"No available channel for model claude-sonnet-5 under group auto (distributor)","type":"new_api_error"}}`)
+	}))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	err = providerError(resp, "claude-sonnet-5")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if Retriable(err) {
+		t.Fatalf("missing-model error must not be retriable: %v", err)
+	}
+	var me *providerModelError
+	if !errors.As(err, &me) {
+		t.Fatalf("expected providerModelError, got %T: %v", err, err)
+	}
+	if !strings.Contains(me.message, "claude-sonnet-5") || !strings.Contains(me.message, "/models") {
+		t.Fatalf("message should name the model and the fix, got: %v", me.message)
+	}
+	if desc := DescribeError(err); !strings.Contains(desc, "/models") {
+		t.Fatalf("DescribeError should surface the actionable message, got: %v", desc)
 	}
 }
 

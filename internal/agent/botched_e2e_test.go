@@ -54,10 +54,10 @@ func TestSendRecoversFromBotchedToolCall(t *testing.T) {
 	}
 }
 
-// Same recovery on the PROMPT-BASED path (native_tools: false) — the path your
-// model (longcat-2.0 / hcnsec) actually uses. The model emits the aliased tag in
-// plain text; extractToolCalls returns no calls and no parse error, so the
-// aliased-tag detector must catch it.
+// Same recovery on the PROMPT-BASED path (native_tools: false) — the path
+// your model actually uses. The model emits the aliased tag in plain text;
+// extractToolCalls returns no calls and no parse error, so the aliased-tag
+// detector must catch it.
 func TestSendPromptBasedRecoversFromBotchedToolCall(t *testing.T) {
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -89,6 +90,7 @@ type commandItem struct {
 
 var commands = []commandItem{
 	{name: "/help", description: "Show keyboard shortcuts and commands"},
+	{name: "/init", description: "Analyze the project and write .mihani.md instructions"},
 	{name: "/clear", description: "Clear the visible conversation"},
 	{name: "/new", description: "Start a new session"},
 	{name: "/resume", description: "Resume a previous conversation"},
@@ -109,6 +111,7 @@ var commands = []commandItem{
 	{name: "/mouse", description: "Show mouse capture state (click menus / drag select)"},
 	{name: "/settings", description: "Open Mihani settings"},
 	{name: "/update", description: "Check for a newer Mihani Code and install it"},
+	{name: "/export", description: "Export conversation as markdown or JSON"},
 	{name: "/quit", description: "Exit Mihani Code"},
 }
 
@@ -1113,6 +1116,94 @@ func (m *Model) copyLastReply() tea.Cmd {
 	}
 	m.notify("No reply to copy yet")
 	return tick()
+}
+
+// applyExport writes the current conversation to ~/.mihani/export.* in the
+// selected format (markdown, json, text).
+func (m *Model) applyExport(format string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		m.notify("Export failed: cannot find home dir")
+		return
+	}
+	dir := filepath.Join(home, ".mihani")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		m.notify("Export failed: " + err.Error())
+		return
+	}
+
+	var content string
+	switch format {
+	case "markdown":
+		content = m.exportMarkdown()
+	case "json":
+		content = m.exportJSON()
+	default:
+		content = m.exportText()
+	}
+
+	ext := map[string]string{"markdown": ".md", "json": ".json", "text": ".txt"}[format]
+	path := filepath.Join(dir, "export."+strings.TrimPrefix(ext, ".")+"-"+time.Now().Format("20060102-150405")+ext)
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		m.notify("Export failed: " + err.Error())
+		return
+	}
+	m.notify("Exported to " + path)
+}
+
+func (m *Model) exportMarkdown() string {
+	var b strings.Builder
+	b.WriteString("# Mihani Code Export\n\n")
+	for _, blk := range m.blocks {
+		switch blk.kind {
+		case blockUser:
+			b.WriteString("## User\n\n" + blk.content + "\n\n")
+		case blockAssistant:
+			b.WriteString("## Assistant\n\n" + blk.content + "\n\n")
+		case blockTool:
+			b.WriteString("```\n[tool: " + blk.label + "]\n```\n\n")
+		case blockInfo:
+			b.WriteString("> " + blk.content + "\n\n")
+		case blockError:
+			b.WriteString("> [!ERROR] " + blk.content + "\n\n")
+		}
+	}
+	return b.String()
+}
+
+func (m *Model) exportJSON() string {
+	type msg struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	msgs := []msg{}
+	for _, blk := range m.blocks {
+		switch blk.kind {
+		case blockUser:
+			msgs = append(msgs, msg{Role: "user", Content: blk.content})
+		case blockAssistant:
+			msgs = append(msgs, msg{Role: "assistant", Content: blk.content})
+		case blockTool:
+			msgs = append(msgs, msg{Role: "tool", Content: blk.label})
+		}
+	}
+	data, _ := json.MarshalIndent(msgs, "", "  ")
+	return string(data)
+}
+
+func (m *Model) exportText() string {
+	var b strings.Builder
+	for _, blk := range m.blocks {
+		switch blk.kind {
+		case blockUser:
+			b.WriteString("USER: " + blk.content + "\n\n")
+		case blockAssistant:
+			b.WriteString("AI: " + blk.content + "\n\n")
+		case blockTool:
+			b.WriteString("[tool: " + blk.label + "]\n")
+		}
+	}
+	return b.String()
 }
 
 // userMsgIndexes lists transcript positions of user messages, oldest first.

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Regression: Mihani Pro (seekai) now supports native OpenAI function
+// Regression: Mihani Pro now supports native OpenAI function
 // calling (verified against the gateway 2026-08-30). The old
 // native_tools:false made opus models answer in prose instead of using
 // tools ("I can't write files here").
@@ -18,15 +18,15 @@ func TestMihaniProUsesNativeToolsByDefault(t *testing.T) {
 	if NativeToolsDefault("https://seekai.cc/v1") != nil {
 		t.Fatal("seekai must no longer be on the strips-tools list")
 	}
-	// hcnsec stays on the prompt protocol until its gateway proves support.
-	if NativeToolsDefault("https://api.hcnsec.cn/v1") == nil {
-		t.Fatal("hcnsec should stay prompt-based for now")
+	// Unknown endpoints default to native (nil).
+	if NativeToolsDefault("https://unknown-provider.invalid/v1") != nil {
+		t.Fatal("unknown endpoint should default to native tools")
 	}
 }
 
-// Stored configs from older releases carry native_tools:false for seekai
-// hosts and the old 8192 output budget. Load must upgrade both.
-func TestLoadUpgradesStaleSeekaiConfig(t *testing.T) {
+// Stored configs from older releases carry native_tools:false for the pro
+// endpoint and the old 8192 output budget. Load must upgrade both.
+func TestLoadUpgradesStaleProConfig(t *testing.T) {
 	isolatedHome(t)
 	stale := `{
 	  "version": 2,

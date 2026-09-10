@@ -9,7 +9,7 @@ Mihani Code is a native Go terminal AI coding agent. It provides a focused works
 - Multi-turn tool execution loops: read, write, edit, delete (files or whole directories), search files plus shell commands
 - **Interactive questions**: the model can pause mid-task and ask you a question - options appear as a menu you pick from, or you type a custom answer; it may ask several in a row
 - **Live todo list**: the agent maintains a visible task card (`todo_write`) that updates in place with ✓/◐/○ per item as work progresses
-- Two built-in endpoints (`hcnsec`, `seekai`) with curated default models; `/connect` discovers models from any OpenAI-compatible endpoint
+- Two built-in endpoints with curated default models; `/connect` discovers models from any OpenAI-compatible endpoint
 - **Live cost meter**: real input/output token accounting, per-model $ pricing, rolling 24h spend per provider
 - **Daily budget enforcement**: turns are refused once a provider reaches its 24h cap (default $10)
 - **Key protection**: API keys are never written to config.json, never rendered in any UI surface, XOR-obfuscated in the binary, and redacted from every tool result
@@ -113,6 +113,7 @@ While a turn is running you can keep typing: additional prompts are queued and s
 ## Slash commands
 
 - `/help` keyboard shortcuts and commands
+- `/init` analyze the project and write `.mihani.md` project instructions
 - `/clear` clear the visible conversation
 - `/new` start a fresh session
 - `/resume` (aliases `/seasons`, `/sessions`) pick and restore a previous conversation in this folder
@@ -135,7 +136,7 @@ Modes shape what the agent is allowed to do before tools ever run:
 - **research** - investigate and compare; reads freely and can write deliverables (notes, reports, docs)
 - **ask** - explanations only
 
-Modes are independent of the provider: **the mode controls what the agent is allowed to do** (whether it may mutate files), and **you pick the provider/model separately with `/providers` / `/models` in any mode**. One thing to know: whether the model can actually use the file/shell tools depends on the provider/gateway - Mihani Cloud (DeepSeek) does; on the Mihani Pro gateway the models only expose that gateway's own tools, so file/shell edits work in **build** mode on Mihani Cloud, while Mihani Pro is best for reading, explaining, and planning (ask/plan/research).
+Modes are independent of the provider: **the mode controls what the agent is allowed to do** (whether it may mutate files), and **you pick the provider/model separately with `/providers` / `/models` in any mode**. Both built-in endpoints run Mihani's full file/shell tool set — build mode works on Mihani Cloud and Mihani Pro alike.
 
 Plan, Research, and Ask refuse mutating tools (`write_file`, `edit_file`, `delete_file`, `bash`) without asking the provider to retry them.
 
@@ -145,14 +146,14 @@ Mihani Code ships with two built-in backends presented under Mihani branding - e
 
 | Provider | Public label | Models |
 | --- | --- | --- |
-| `mihani` | Mihani Cloud | `DeepSeek-V4-Pro` *(default)*, `Qwen3.8-27B`, `step-3.7-flash`, `sensenova-6.8-flash-lite`, `MiniMax-M3` |
-| `mihani-pro` | Mihani Pro | `claude-opus-5`, `claude-opus-4-8`, `claude-fable-5`, `claude-sonnet-5` |
+| `mihani` | Mihani Cloud | `DeepSeek-V4-Pro` *(default)*, `step-3.7-flash`, `glm-5.3-flash`, `sensenova-6.8-flash-lite`, `spark-x2.5` |
+| `mihani-pro` | Mihani Pro | `step-router-v1`, `step-explore`, `Qwen3.6-35B-A3B`, `spark-x2.5`, `kimi-k3` |
 
 Switch with `/providers` and `/models`; `/connect` adds any other OpenAI-compatible endpoint under a name you choose. Upstream identifiers from earlier releases are renamed automatically on first launch and never shown in the UI.
 
 ### Endpoints without native tool calling
 
-Some gateways strip OpenAI's `tools` parameter, so models there never see file/shell tools. For those, set `"native_tools": false` on the provider (the second built-in endpoint ships this way) and Mihani drives tools through a text protocol instead: the tool catalog joins the system prompt, the model replies with `<tool_call>{...}</tool_call>` blocks, Mihani executes them locally and feeds back `<tool_result>` blocks until the task completes. This works with any chat-completions endpoint - tools become a property of Mihani, not of the API. Providers added via `/connect` that point at a known gateway (`seekai`, `hcnsec`) are auto-detected and default to the text protocol, and `read_file` supports `offset`/`limit` line-paging so large files never hit a truncation wall.
+Some gateways strip OpenAI's `tools` parameter, so models there never see file/shell tools. For those, set `"native_tools": false` on the provider (the second built-in endpoint ships this way) and Mihani drives tools through a text protocol instead: the tool catalog joins the system prompt, the model replies with `<tool_call>{...}</tool_call>` blocks, Mihani executes them locally and feeds back `<tool_result>` blocks until the task completes. This works with any chat-completions endpoint - tools become a property of Mihani, not of the API. Providers added via `/connect` that point at a known gateway are auto-detected and default to the text protocol, and `read_file` supports `offset`/`limit` line-paging so large files never hit a truncation wall.
 
 Reasoning models are supported throughout: streamed `reasoning_content` (GLM/DeepSeek style) and Anthropic `thinking` deltas render in a dedicated dimmed thinking block above the answer.
 
@@ -237,20 +238,13 @@ The config file lives at `~/.mihani/config.json` after your first change and sup
 
 ### Key-protecting gateway
 
-To keep the built-in providers' upstream API keys out of the distributed binary, deploy the key-protecting proxy. **Easiest path: Cloudflare Worker (free, no payment required).** See `gateway-worker/` - one `index.js` file, deploy with `wrangler deploy`, set your secrets in the Cloudflare Dashboard, done.
+To keep the built-in providers' upstream API keys out of the distributed binary, Mihani ships with a key-protecting Cloudflare Worker proxy. The worker holds the real keys server-side; the client only presents a token. **Works out of the box** — no setup required.
 
-Alternatively there is a Go standalone gateway (`gateway/`) for VPS / Fly.io deployments if you prefer that.
+Want to self-host? See `gateway-worker/DEPLOY.md` (Cloudflare Worker) or `gateway/` (Go standalone for VPS/Fly.io).
 
-The worker holds the real keys server-side; the client only presents a token you issue. Point the client at it (opt-in; default is unchanged):
+`/pro/...` and `/cloud/...` forward to the Mihani Pro and Cloud upstreams respectively, streaming responses back verbatim. See `docs/gateway.md` for the design.
 
-```sh
-export MIHANI_GATEWAY=https://mihani-gw.<your-subdomain>.workers.dev
-export MIHANI_GATEWAY_TOKEN=<your-client-token>
-```
-
-`/pro/...` and `/cloud/...` forward to the Mihani Pro and Cloud upstreams respectively, streaming responses back verbatim. See `docs/gateway.md` for the design and `gateway-worker/DEPLOY.md` for the Cloudflare Worker instructions.
-
-**Note:** distributed binaries no longer ship embedded keys. To use the built-in providers, deploy the gateway (see `gateway-worker/DEPLOY.md`) and point the client at it via `MIHANI_GATEWAY`. Until then, use `/connect` to add your own provider key.
+**Note:** distributed binaries never ship embedded keys. If you self-host a gateway, set `MIHANI_GATEWAY` to point at it.
 
 ## Skills and MCP
 

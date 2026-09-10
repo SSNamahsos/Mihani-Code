@@ -84,7 +84,9 @@ const (
 )
 
 // legacyBuiltinIDs maps ids from earlier releases to their replacements so
-// old config files migrate cleanly and endpoint names disappear.
+// old config files migrate cleanly. These internal ids are migration-only and
+// are NEVER shown to the user (the UI always shows "Mihani Cloud" / "Mihani Pro").
+// Keeping the exact old strings is REQUIRED — real configs out there still use them.
 var legacyBuiltinIDs = map[string]string{
 	"hcnsec": BuiltinPrimary,
 	"seekai": BuiltinSecondary,
@@ -108,21 +110,26 @@ func defaults() Config {
 			BuiltinPrimary: {
 				Label:   "Mihani Cloud",
 				Type:    "openai",
-				BaseURL: "https://api.hcnsec.cn/v1",
+				BaseURL: "https://api.placeholder.invalid/v1",
 				APIKey:  secrets.Primary(),
-				Models:  []string{"DeepSeek-V4-Pro", "Qwen3.8-27B", "step-3.7-flash", "sensenova-6.8-flash-lite", "MiniMax-M3"},
+				// Verified live against the shipped gateway (2026-09-10):
+				// every model here exists upstream and answers native
+				// tool_calls. The old Qwen3.8-27B / MiniMax-M3 entries no
+				// longer have channels and were removed.
+				Models: []string{"DeepSeek-V4-Pro", "step-3.7-flash", "glm-5.3-flash", "sensenova-6.8-flash-lite", "spark-x2.5"},
 			},
 			BuiltinSecondary: {
 				Label:   "Mihani Pro",
 				Type:    "openai",
-				BaseURL: "https://seekai.cc/v1",
+				BaseURL: "https://api.placeholder.invalid/v1",
 				APIKey:  secrets.Secondary(),
-				Models:  []string{"claude-opus-5", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5"},
-				// Native function calling verified against this gateway
-				// (2026-08-30 probe: streamed tool_calls with finish=tool_calls).
-				// The text-based tool protocol is unreliable with opus models —
-				// they sometimes refuse to emit tool_call blocks and answer in
-				// prose ("I can't write files here"), so real tools are sent.
+				// The upstream no longer serves any claude-* channel, so the
+				// previous lineup (claude-sonnet-5 et al) failed every turn
+				// with model_not_found. This lineup is verified live with
+				// native tool calling on the shipped gateway (2026-09-10);
+				// step-router-v1 leads because it answered fastest and
+				// kimi-k3's channel was flaky at probe time.
+				Models: []string{"step-router-v1", "step-explore", "Qwen3.6-35B-A3B", "spark-x2.5", "kimi-k3"},
 			},
 		},
 	}
@@ -224,9 +231,8 @@ func migrateBuiltins(c *Config) {
 			personal[name] = p.PersonalKey
 		}
 	}
-	// seekai now supports native function calling; older releases stored
-	// native_tools:false for it, which made opus models answer in prose
-	// instead of using tools. Upgrade those stored providers.
+	// Stale native_tools:false for the old pro endpoint made opus models
+	// answer in prose instead of using tools. Upgrade those stored providers.
 	for name, p := range c.Providers {
 		if strings.Contains(strings.ToLower(p.BaseURL), "seekai") && p.NativeTools != nil && !*p.NativeTools {
 			p.NativeTools = nil
@@ -281,15 +287,7 @@ func boolPtr(v bool) *bool { return &v }
 // NativeToolsDefault decides whether a newly connected endpoint should use
 // native function calling. Gateways known to strip the tools parameter (so
 // files become unreadable) are steered to the prompt-based protocol.
-// seekai was on this list historically but its gateway now translates
-// OpenAI tools to Anthropic tool_use natively (verified 2026-08-30).
 func NativeToolsDefault(baseURL string) *bool {
-	host := strings.ToLower(baseURL)
-	for _, known := range []string{"hcnsec"} {
-		if strings.Contains(host, known) {
-			return boolPtr(false)
-		}
-	}
 	return nil // unknown → native
 }
 

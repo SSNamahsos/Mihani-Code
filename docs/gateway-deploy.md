@@ -5,15 +5,14 @@
 The old upstream keys shipped inside released binaries (recoverable via the
 public XOR mask) — treat them as **compromised**. Rotate both:
 
-**Mihani Pro (seekai.cc)**
-1. Log in to the seekai.cc dashboard → your API key page.
-2. **Revoke/delete the old key** (the one that was embedded — the `uGO…` / any
-   earlier value). Do not just add a new one; the old one must be disabled.
+**Mihani Pro**
+1. Log in to your provider's dashboard → your API key page.
+2. **Revoke/delete the old key** (the one that was embedded). Do not just add a new one; the old one must be disabled.
 3. Create a **new** key and note its scope/allowlist of models.
 4. This is the value that goes into `PRO_KEY`.
 
-**Mihani Cloud (api.hcnsec.cn)**
-1. In the hcnsec dashboard, **revoke the old key** (the embedded `LLu…` value).
+**Mihani Cloud**
+1. In your provider's dashboard, **revoke the old key**.
 2. Create a **new** key.
 3. This is the value that goes into `CLOUD_KEY`.
 
@@ -22,8 +21,8 @@ The two keys provided and stored in `gateway/.env.local` are assumed to be the
 merely replaced — otherwise the leaked keys still work.
 
 > Note: your local `~/.mihani/config.json` also contains the old `personal_key`
-> values for `hsenc`/`testseek`. Update or remove those after rotation, and never
-> commit that file (it is already git-ignored).
+> values. Update or remove those after rotation, and never commit that file
+> (it is already git-ignored).
 
 ## 2. Deploy the gateway
 
@@ -35,8 +34,8 @@ you a public HTTPS URL.
 # from the gateway/ directory
 fly launch --name mihani-gw --internal-port 8080
 # set secrets (never in the repo):
-fly secrets set PRO_BASE=https://seekai.cc/v1 PRO_KEY=<new-pro-key>
-fly secrets set CLOUD_BASE=https://api.hcnsec.cn/v1 CLOUD_KEY=<new-cloud-key>
+fly secrets set PRO_BASE=<your-pro-upstream>/v1 PRO_KEY=<new-pro-key>
+fly secrets set CLOUD_BASE=<your-cloud-upstream>/v1 CLOUD_KEY=<new-cloud-key>
 fly secrets set CLIENT_TOKENS=<long-random-token>
 fly deploy
 # your URL is printed, e.g. https://mihani-gw.fly.dev

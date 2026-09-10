@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -265,7 +266,7 @@ func (a *Agent) openAIRequest(ctx context.Context, p config.Provider, useTools b
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return nil, nil, 0, 0, 0, providerError(resp)
+		return nil, nil, 0, 0, 0, providerError(resp, a.Cfg.CurrentModel)
 	}
 	// Gateways whose base URL is missing the API prefix answer chat requests
 	// with their web app (200 + HTML) instead of a JSON stream. Failing loudly
@@ -456,7 +457,7 @@ func (a *Agent) anthropicRequest(ctx context.Context, p config.Provider, mode st
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return nil, nil, 0, 0, 0, providerError(resp)
+		return nil, nil, 0, 0, 0, providerError(resp, a.Cfg.CurrentModel)
 	}
 	var blocks []map[string]any
 	var text strings.Builder
@@ -815,6 +816,31 @@ type providerCreditError struct {
 
 func (e *providerCreditError) Error() string { return e.message }
 
+// providerModelError marks a request for a model the upstream does not serve
+// (e.g. a New-API distributor answering "No available channel for model X" or
+// "model_not_found"). Retrying can never succeed — the model simply does not
+// exist for this endpoint — so the reconnect loop must skip it and the user
+// gets an actionable message instead of ten minutes of retries.
+type providerModelError struct {
+	message string
+}
+
+func (e *providerModelError) Error() string { return e.message }
+
+var missingModelWords = []string{"model_not_found", "no available channel for model", "does not exist", "unknown model"}
+
+// looksLikeMissingModel reports whether a provider response says the requested
+// model has no channel upstream.
+func looksLikeMissingModel(status int, body string) bool {
+	b := strings.ToLower(body)
+	for _, w := range missingModelWords {
+		if strings.Contains(b, w) {
+			return true
+		}
+	}
+	return false
+}
+
 // Sentinel stream failures. errTruncated is wrapped by errors.Is checks so
 // the caller can branch on the finish reason instead of parsing strings.
 var (
@@ -861,6 +887,10 @@ func DescribeError(err error) string {
 	if errors.As(err, &credit) {
 		return credit.message
 	}
+	var modelErr *providerModelError
+	if errors.As(err, &modelErr) {
+		return modelErr.message
+	}
 	var pe *providerHTTPError
 	if errors.As(err, &pe) {
 		return pe.message // "provider returned 502 — ..." is safe to show
@@ -889,6 +919,10 @@ func Retriable(err error) bool {
 	if errors.As(err, &creditErr) {
 		return false // budget denial: retrying repeats the same failure
 	}
+	var modelErr *providerModelError
+	if errors.As(err, &modelErr) {
+		return false // unknown model: the upstream will never serve it
+	}
 	var transport *providerTransportError
 	if errors.As(err, &transport) {
 		return true // provider timeout / network hiccup: worth retrying
@@ -901,7 +935,7 @@ func Retriable(err error) bool {
 	return true
 }
 
-func providerError(resp *http.Response) error {
+func providerError(resp *http.Response, currentModel string) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	bodyStr := string(body)
 	var payload struct {
@@ -916,6 +950,10 @@ func providerError(resp *http.Response) error {
 			label += ": "
 		}
 		msg := fmt.Sprintf("provider returned %s — %s%s", resp.Status, label, payload.Error.Message)
+		if looksLikeMissingModel(resp.StatusCode, msg) {
+			return &providerModelError{message: "The model \"" + currentModel +
+				"\" is not available on this provider right now — pick another one with /models (or /providers). Nothing is wrong with your setup; this model simply has no channel upstream."}
+		}
 		if looksLikeCreditExhausted(resp.StatusCode, msg) {
 			return &providerCreditError{status: resp.StatusCode, message: msg +
 				" The provider reports exhausted credits/budget — open /settings → “Reset usage window”, add your personal API key, or switch provider with /providers"}
@@ -926,6 +964,10 @@ func providerError(resp *http.Response) error {
 	msg := fmt.Sprintf("provider returned %s", resp.Status)
 	if excerpt != "" {
 		msg = fmt.Sprintf("provider returned %s — %s", resp.Status, clip(excerpt, 300))
+	}
+	if looksLikeMissingModel(resp.StatusCode, msg) {
+		return &providerModelError{message: "The model \"" + currentModel +
+			"\" is not available on this provider right now — pick another one with /models (or /providers). Nothing is wrong with your setup; this model simply has no channel upstream."}
 	}
 	if looksLikeCreditExhausted(resp.StatusCode, msg) {
 		return &providerCreditError{status: resp.StatusCode, message: msg +
@@ -1047,7 +1089,25 @@ func workspaceContext(root string) string {
 			b.WriteString("\n- " + server.Name)
 		}
 	}
+	if ctx, err := readProjectContext(root); err == nil && ctx != "" {
+		b.WriteString("\n\n# Project Instructions\n" + ctx)
+	}
 	return b.String()
+}
+
+// readProjectContext looks for a .mihani.md file in the workspace root and
+// returns its contents. This file is NOT created by Mihani — users create it
+// to give project-specific instructions (tech stack, coding style, etc).
+func readProjectContext(root string) (string, error) {
+	if root == "" {
+		return "", nil
+	}
+	path := filepath.Join(root, ".mihani.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
 }
 
 func (a *Agent) openAITools() []map[string]any {

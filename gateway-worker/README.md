@@ -6,13 +6,13 @@ with a token you issue; the upstream key is never exposed.
 
 ## Environment variables (set in Cloudflare Dashboard)
 
-| Variable              | Required | Example                                  |
-|-----------------------|----------|------------------------------------------|
-| `PRO_BASE`            | yes      | `https://seekai.cc/v1`                   |
-| `PRO_KEY`             | yes      | `<your-pro-key>`                             |
-| `CLOUD_BASE`          | yes      | `https://api.hcnsec.cn/v1`                   |
-| `CLOUD_KEY`           | yes      | `<your-cloud-key>`                           |
-| `CLIENT_TOKENS`       | yes      | `<your-client-tokens>`                       |
+| Variable       | Required | Example                  |
+|----------------|----------|--------------------------|
+| `PRO_BASE`     | yes      | `https://your-pro-upstream/v1` |
+| `PRO_KEY`      | yes      | `sk-...`                 |
+| `CLOUD_BASE`   | yes      | `https://your-cloud-upstream/v1` |
+| `CLOUD_KEY`    | yes      | `sk-...`                 |
+| `CLIENT_TOKENS` | yes     | `tok_abc123,tok_def456`  |
 
 ## Local dev
 

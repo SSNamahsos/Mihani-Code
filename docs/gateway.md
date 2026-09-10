@@ -6,10 +6,9 @@ providers **without shipping the upstream API keys in the binary.**
 ## Why it exists
 
 The Mihani Code client is a desktop binary. Historically it embedded the
-upstream API keys (for `seekai.cc` / "Mihani Pro" and `api.hcnsec.cn` / "Mihani
-Cloud"), obfuscated with a reversible XOR whose mask was in the open-source
-code. That means anyone with the released `.exe` can recover the keys, so they
-were effectively public.
+upstream API keys, obfuscated with a reversible XOR whose mask was in the
+open-source code. That means anyone with the released `.exe` can recover the
+keys, so they were effectively public.
 
 **No client-side obfuscation can stop a binary from leaking a secret.** The only
 way to keep the keys out of the client is to not put them in the client at all:
@@ -18,9 +17,9 @@ the client talks to *your* gateway, and the gateway holds the keys.
 ```
             ┌──────────────────────────────────────────────┐
  client     │  YOUR GATEWAY (server)                        │        upstream
- ─────────▶ │  - checks client token (auth)                 │  ─────────▶  seekai.cc
+ ─────────▶ │  - checks client token (auth)                 │  ─────────▶  provider A
  (no keys)  │  - rate-limits per IP + caps concurrency      │              (Mihani Pro)
-            │  - swaps token for the REAL upstream key      │  ─────────▶  api.hcnsec.cn
+            │  - swaps token for the REAL upstream key      │  ─────────▶  provider B
             │  - streams the response back (SSE)            │              (Mihani Cloud)
             └──────────────────────────────────────────────┘
 ```
@@ -77,9 +76,9 @@ never forwarded upstream.
 
 | Var              | Required | Default | Meaning                                   |
 |------------------|----------|---------|-------------------------------------------|
-| `PRO_BASE`       | yes      | —       | Mihani Pro upstream base (…/v1)           |
+| `PRO_BASE`       | yes      | —       | Mihani Pro upstream base (.../v1)           |
 | `PRO_KEY`        | yes      | —       | **secret** upstream key (never exposed)   |
-| `CLOUD_BASE`     | yes      | —       | Mihani Cloud upstream base (…/v1)         |
+| `CLOUD_BASE`     | yes      | —       | Mihani Cloud upstream base (.../v1)         |
 | `CLOUD_KEY`      | yes      | —       | **secret** upstream key (never exposed)   |
 | `CLIENT_TOKENS`  | prod yes | —       | comma-separated client tokens             |
 | `PORT`           | no       | `:8080` | listen address                            |
@@ -123,8 +122,8 @@ gateway and uses a client token:
 | `MIHANI_GATEWAY`       | e.g. `https://gw.example.com`. Built-in Pro → `<gw>/pro/v1`, Cloud → `<gw>/cloud/v1` |
 | `MIHANI_GATEWAY_TOKEN` | the client token (must be in the gateway's `CLIENT_TOKENS`)         |
 
-When `MIHANI_GATEWAY` is unset, the client behaves exactly as before. **Do not
-ship a default that points at the gateway until it is deployed and you have
+When `MIHANI_GATEWAY` is unset, the client uses the shipped default gateway.
+**Do not point it at a self-hosted gateway until it is deployed and you have
 retired the embedded keys.** The migration order matters (see Migration below).
 
 ## Migration plan (order matters)

@@ -18,7 +18,7 @@ import (
 // requests, and never sent back to the client.
 type Upstream struct {
 	Name   string // "pro" | "cloud"
-	Base   string // e.g. https://seekai.cc/v1
+	Base   string // e.g. https://your-provider/v1
 	APIKey string // upstream provider key (secret)
 }
 

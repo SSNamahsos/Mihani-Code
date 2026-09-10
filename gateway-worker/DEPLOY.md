@@ -6,9 +6,9 @@ with a token; the gateway swaps it for the real upstream key before forwarding.
 
 ## What you need
 
-- Wrangler CLI (you already have it)
+- Wrangler CLI (`npm i -g wrangler`)
 - A Cloudflare account
-- Your upstream keys (rotated — see `gateway-deploy.md` step 1)
+- Your upstream API keys
 
 ## Deploy (one-time)
 
@@ -29,48 +29,20 @@ wrangler deploy
 **Important:** after deploy, set your secrets **in the Cloudflare Dashboard**:
 Workers → `mihani-gw` → Settings → Environment Variables → add:
 
-| Variable   | Value                                              |
-|------------|----------------------------------------------------|
-| `PRO_BASE` | `https://seekai.cc/v1`                             |
-| `PRO_KEY`  | `<your-new-pro-key>`                               |
-| `CLOUD_BASE` | `https://api.hcnsec.cn/v1`                       |
-| `CLOUD_KEY` | `<your-new-cloud-key>`                           |
+| Variable       | Value                  |
+|----------------|------------------------|
+| `PRO_BASE`     | `<your-pro-upstream>/v1` |
+| `PRO_KEY`      | `<your-pro-key>`       |
+| `CLOUD_BASE`   | `<your-cloud-upstream>/v1` |
+| `CLOUD_KEY`    | `<your-cloud-key>`     |
 | `CLIENT_TOKENS` | `<your-client-token>` |
 
 Then click **Save and Deploy**. The env vars are injected at runtime — never
 commit them to the repo.
 
-## Test locally (before deploying)
-
-```powershell
-cd D:\Mihani\Apps\MihaniCode\gateway-worker
-# Set env vars first (or put them in wrangler.toml vars section):
-$env:PRO_BASE = "https://seekai.cc/v1"
-$env:PRO_KEY = "<your-new-pro-key>"
-$env:CLOUD_BASE = "https://api.hcnsec.cn/v1"
-$env:CLOUD_KEY = "<your-new-cloud-key>"
-$env:CLIENT_TOKENS = "<your-client-token>"
-wrangler dev
-```
-
-In another terminal, test:
-```powershell
-$TOKEN = "<your-client-token>"
-# Health
-Invoke-RestMethod http://127.0.0.1:8787/health
-# Pro models
-Invoke-RestMethod "http://127.0.0.1:8787/pro/models" -Headers @{ Authorization = "Bearer $TOKEN" } | Select-Object -ExpandProperty data | ForEach-Object { $_.id }
-# Cloud models
-Invoke-RestMethod "http://127.0.0.1:8787/cloud/models" -Headers @{ Authorization = "Bearer $TOKEN" } | Select-Object -ExpandProperty data | ForEach-Object { $_.id }
-# Bad token should 401
-Invoke-RestMethod "http://127.0.0.1:8787/pro/models" -Headers @{ Authorization = "Bearer wrong" }
-```
-
 ## Point Mihani at it
 
-Once deployed (URL like `https://mihani-gw.yourname.workers.dev`), on your
-machine set two environment variables (System Properties → Environment Variables
-→ User):
+Once deployed (URL like `https://mihani-gw.yourname.workers.dev`), set:
 
 ```
 MIHANI_GATEWAY=https://mihani-gw.yourname.workers.dev
@@ -79,20 +51,3 @@ MIHANI_GATEWAY_TOKEN=<your-client-token>
 
 Close any open Mihani windows and relaunch — the built-in providers will now
 route through your worker.
-
-## What this does (and doesn't) do
-
-| Feature                        | Status        |
-|--------------------------------|---------------|
-| Proxies /pro/* and /cloud/*    | ✅            |
-| Swaps client token → upstream key | ✅         |
-| Streams SSE responses          | ✅            |
-| Per-IP rate limit (30/min)     | ✅ (memory)   |
-| Client auth (token match)      | ✅            |
-| Per-user billing / accounting  | ❌ (future)   |
-| Persistent rate limiting       | ❌ (KV needed) |
-| Request logging                | ❌ (add later) |
-
-The memory-based rate limiter resets when the worker restarts. For production
-use with many users, migrate it to KV. For a personal / small-team deployment
-this is fine.
