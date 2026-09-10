@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -52,5 +53,37 @@ func TestSplitDisplayStyled(t *testing.T) {
 	}
 	if !strings.HasPrefix(post, "世界") {
 		t.Fatalf("post = %q", post)
+	}
+}
+
+// Wheel-scrolling mid-drag extends the selection into the newly revealed
+// content rows instead of leaving the head where the pointer stopped.
+func TestWheelScrollExtendsActiveSelection(t *testing.T) {
+	m := newTestModel(80, 24)
+	for i := 0; i < 10; i++ {
+		m.appendBlock(&block{kind: blockUser, content: fmt.Sprintf("prompt %d", i)})
+	}
+	m.relayout()
+	m.refreshView()
+	total := len(m.renderedLines)
+	if total < 5 {
+		t.Fatalf("test setup: transcript too short (%d rows)", total)
+	}
+	m.selOn = true
+	m.selDrag = true
+	m.selA = selPos{row: total - 1, col: 0}
+	m.selH = m.selA
+	m.extendSelection(50) // far past the end: clamps to the last row
+	if m.selH.row != total-1 {
+		t.Fatalf("head row = %d, want clamp at %d", m.selH.row, total-1)
+	}
+	m.extendSelection(-total * 2)
+	if m.selH.row != 0 {
+		t.Fatalf("head row = %d, want clamp at 0", m.selH.row)
+	}
+	m.clearSelection()
+	m.extendSelection(5)
+	if m.selH != (selPos{}) {
+		t.Fatal("extendSelection must be a no-op without an active selection")
 	}
 }

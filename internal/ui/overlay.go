@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/atotto/clipboard"
 
 	"github.com/SSNamahsos/Mihani-Code/internal/agent"
 	"github.com/SSNamahsos/Mihani-Code/internal/config"
@@ -482,6 +483,27 @@ func (m *Model) command(s string) tea.Cmd {
 			return nil
 		}
 		m.appendBlock(&block{kind: blockInfo, content: result})
+
+	case "/paste":
+		// Insert the clipboard into the composer without sending. This is
+		// the reliable path for large prompts on terminals without
+		// bracketed paste (the classic Windows console types a paste in as
+		// real keystrokes, so even a guarded raw paste can shed its first
+		// short line as a premature send).
+		text, err := clipboard.ReadAll()
+		if err != nil {
+			m.appendBlock(&block{kind: blockError, content: "clipboard: " + err.Error()})
+			return nil
+		}
+		if strings.TrimSpace(text) == "" {
+			m.notify("clipboard is empty")
+			return nil
+		}
+		m.input.InsertString(strings.TrimRight(text, "\r\n"))
+		m.resizeComposer()
+		if lines := strings.Count(text, "\n") + 1; lines > 1 {
+			m.notify(fmt.Sprintf("pasted %d lines — enter sends the whole thing", lines))
+		}
 
 	case "/mouse":
 		// Toggle mouse capture live. Capture enables click menus + in-app

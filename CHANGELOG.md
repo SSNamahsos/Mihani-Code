@@ -2,6 +2,15 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.31
+
+### Fixed
+- **Large pastes no longer send one fragment per line.** On terminals without bracketed paste (notably the classic Windows console), a 5 KB prompt used to shed its first line as an instant send, then every following line as another send. The paste guard now recognizes the first line of a machine-speed burst, stays alive across blank lines, and keeps riding after short lines.
+
+### Added
+- **`/paste`** — inserts the clipboard into the composer without sending. The bulletproof way to paste big prompts in any terminal.
+- **Selections that span more than one screen** (in mouse-capture mode, `/mouse`): the drag selection now extends across scrolling — the wheel grows it mid-drag, and dragging against the transcript's top/bottom edge auto-scrolls and keeps selecting.
+
 ## v0.2.30
 
 ### Fixed

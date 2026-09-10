@@ -105,6 +105,43 @@ func (m *Model) mouseMove(x tea.MouseMsg) {
 			m.selDrag = true
 		}
 	}
+	// Drag-to-edge auto-scroll: holding the pointer near the top or bottom
+	// edge of the transcript scrolls the viewport and extends the selection
+	// into the newly revealed rows, so a selection can span more than one
+	// screen. The native terminal selection can never do this (it is
+	// screen-anchored and the app runs in the alternate buffer).
+	const edge = 2
+	top := 1 // transcript starts under the header row
+	bottom := top + m.view.Height - 1
+	switch {
+	case x.Y <= top+edge:
+		m.scrollUp(2)
+		m.extendSelection(-2)
+	case x.Y >= bottom-edge:
+		m.scrollDown(2)
+		m.extendSelection(2)
+	}
+	// Repaint so the highlight follows the pointer immediately instead of
+	// waiting for the next unrelated refresh.
+	m.refreshView()
+}
+
+// extendSelection moves the drag head when the transcript scrolls during an
+// active selection. The anchor is content-anchored already; the head follows
+// the content so a wheel scroll mid-drag grows the selection into whatever
+// the scroll revealed. No-op when nothing is being selected.
+func (m *Model) extendSelection(delta int) {
+	if !m.selOn {
+		return
+	}
+	m.selH.row += delta
+	if m.selH.row < 0 {
+		m.selH.row = 0
+	}
+	if m.selH.row >= len(m.renderedLines) {
+		m.selH.row = len(m.renderedLines) - 1
+	}
+	m.refreshView()
 }
 
 func (m *Model) mouseRelease(x tea.MouseMsg) {

@@ -108,6 +108,7 @@ var commands = []commandItem{
 	{name: "/mcp", description: "Show configured MCP servers"},
 	{name: "/skills", description: "List installed skills (auto-loaded by the AI)"},
 	{name: "/undo", description: "Restore the latest Mihani file snapshot"},
+	{name: "/paste", description: "Insert clipboard text into the composer without sending"},
 	{name: "/mouse", description: "Toggle mouse capture (off = native terminal text selection)"},
 	{name: "/settings", description: "Open Mihani settings"},
 	{name: "/update", description: "Check for a newer Mihani Code and install it"},
@@ -211,8 +212,9 @@ type Model struct {
 	// clipboard as a raw stream of key events, where every newline arrives
 	// as an Enter key. A burst of runes immediately before an Enter on a
 	// multiline composer is treated as a literal newline, not a submit.
-	lastKeyAt  time.Time
-	burstRunes int
+	lastKeyAt    time.Time
+	burstRunes   int
+	lastSubmitAt time.Time // set when a submit happened while a burst was active
 
 	reconnectFailures int // consecutive provider failures since the last live progress (reset when the AI keeps working)
 	lastRetries       int // retries the previous turn needed; shown in its error block
@@ -601,8 +603,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case x.Action == tea.MouseActionPress && x.Button == tea.MouseButtonWheelUp:
 			m.scrollUp(3)
+			m.extendSelection(-3)
 		case x.Action == tea.MouseActionPress && x.Button == tea.MouseButtonWheelDown:
 			m.scrollDown(3)
+			m.extendSelection(3)
 		case x.Button == tea.MouseButtonLeft && x.Action == tea.MouseActionPress:
 			m.mousePress(x)
 		case x.Button == tea.MouseButtonLeft && x.Action == tea.MouseActionRelease:
@@ -719,7 +723,7 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	// Track the rune burst for the raw-paste Enter guard (below).
 	if x.Type == tea.KeyRunes {
 		now := time.Now()
-		if now.Sub(m.lastKeyAt) > 150*time.Millisecond {
+		if now.Sub(m.lastKeyAt) > pasteBurstWindow {
 			m.burstRunes = 0
 		}
 		m.burstRunes += len(x.Runes)
@@ -936,11 +940,17 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		}
 		// Raw (non-bracketed) paste guard: a fast burst of pasted runes that
-		// ends in a newline on a multiline composer is still paste, not a
-		// deliberate submit — keep the newline in the text.
+		// ends in a newline is still paste, not a deliberate submit — keep
+		// the newline in the text.
 		if m.pasteBurstEnter() {
 			m.input.InsertString("\n")
 			m.resizeComposer()
+			// Count the newline into the burst so blank lines inside a
+			// pasted block keep the guard alive (previously only runes
+			// refreshed the burst clock, so an empty line mid-paste
+			// submitted whatever had accumulated so far).
+			m.burstRunes++
+			m.lastKeyAt = time.Now()
 			return m, nil, true
 		}
 		if m.busy {
@@ -952,21 +962,54 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			}
 			return m, nil, true
 		}
+		if m.pasteBurstActive() {
+			m.lastSubmitAt = time.Now()
+		}
 		m.input.Reset()
 		return m, m.submit(value), true
 	}
 	return m, nil, false
 }
 
-// pasteBurstEnter reports whether this Enter is almost certainly the
-// final newline of a pasted block arriving as raw keystrokes: the composer
-// already holds multiple lines, a burst of runes arrived just before it,
-// and it was too fast for deliberate typing (~60+ chars/sec).
+// pasteBurstWindow is how long input events keep counting toward one raw
+// paste burst.
+const pasteBurstWindow = 300 * time.Millisecond
+
+// pasteBurstActive reports whether input is currently streaming in at
+// machine speed (i.e. a raw paste is in progress).
+func (m *Model) pasteBurstActive() bool {
+	return time.Since(m.lastKeyAt) < pasteBurstWindow && m.burstRunes >= 8
+}
+
+// pasteBurstEnter reports whether this Enter is part of a pasted block
+// arriving as raw keystrokes (terminals without bracketed paste, notably the
+// classic Windows console, type a paste in as real keys — Enters included).
+// Cases:
+//  1. the composer is already multiline and a rune burst just flowed in:
+//     the paste is mid-stream, keep the newline;
+//  2. the FIRST line of such a paste: the composer is still single-line,
+//     but a machine-speed burst just poured in and its Enter must join the
+//     text instead of submitting it. Deliberate typing never comes close to
+//     that rate (~130+ chars per second);
+//  3. a short line right after a burst-active submit: we are riding the
+//     same paste, so its Enter joins the text too.
 func (m *Model) pasteBurstEnter() bool {
+	if time.Since(m.lastKeyAt) >= pasteBurstWindow {
+		return false
+	}
 	lines := strings.Count(m.input.Value(), "\n") + 1
-	return lines > 1 &&
-		time.Since(m.lastKeyAt) < 150*time.Millisecond &&
-		m.burstRunes >= 8
+	if lines > 1 && m.burstRunes >= 8 {
+		return true
+	}
+	if m.burstRunes >= 40 {
+		return true
+	}
+	if m.burstRunes >= 10 &&
+		!m.lastSubmitAt.IsZero() &&
+		time.Since(m.lastSubmitAt) < pasteBurstWindow {
+		return true
+	}
+	return false
 }
 
 func (m *Model) interrupt() {

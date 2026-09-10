@@ -101,6 +101,8 @@ mihani --version
 | `tab` / `shift+tab` | cycle modes (navigate the palette when it is open) |
 | `↑` / `↓` / `pgup` / `pgdn` | scroll the transcript (arrows stay in the composer while it is multiline) |
 | *select with mouse* | select text with your terminal's own drag selection (native, always works - it auto-copies in Windows Terminal) |
+| `/mouse` + drag | in-app selection: click menus, drag-select with auto-copy, and selections that **extend across scrolling** (wheel or drag-to-edge grows them) |
+| `/paste` | insert clipboard text into the composer without sending - the safe way to paste large prompts |
 | `[` / `]` on a message | keyboard menu: Copy / Fork / Revert for that message |
 | `ctrl+y` or `/copy` | copy Mihani's last reply to the clipboard - toast confirmation |
 | `esc` | interrupt request (press **twice** to terminate); otherwise clear input / close overlays |

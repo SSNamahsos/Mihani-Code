@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +54,69 @@ func TestDeliberateEnterStillSendsMultiline(t *testing.T) {
 	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !m.busy {
 		t.Fatal("deliberate enter should submit (start a turn)")
+	}
+}
+
+// Regression: the FIRST line of a raw paste arrived with an empty (single-
+// line) composer, where the old guard never fired — so a 5 KB prompt went
+// out as one auto-sent message per line. A machine-speed rune burst into a
+// single-line composer followed by Enter is a paste's line ending, not a
+// deliberate submit.
+func TestRawPasteFirstLineDoesNotSubmit(t *testing.T) {
+	m := newTestModel(80, 24)
+	m.input.SetValue("analyze this 5kb prompt i just pasted into the composer")
+	m.burstRunes = 58 // machine-speed burst: ~58 runes in the last 300ms
+	m.lastKeyAt = time.Now()
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.busy || len(m.blocks) != 0 {
+		t.Fatal("first line of a raw paste must not submit")
+	}
+	if !strings.HasSuffix(m.input.Value(), "\n") {
+		t.Fatalf("enter should have joined the text as a newline, got %q", m.input.Value())
+	}
+}
+
+// The same first-line shape from deliberate typing (few runes, even if fast)
+// still submits: the burst counter only accumulates at paste speed.
+func TestTypedFirstLineStillSubmits(t *testing.T) {
+	m := newTestModel(80, 24)
+	m.input.SetValue("analyze this quickly please")
+	m.burstRunes = 12 // well below the machine-speed threshold
+	m.lastKeyAt = time.Now()
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.busy {
+		t.Fatal("typed input + enter should submit")
+	}
+}
+
+// Blank lines inside a raw paste: only the newline events arrive (no runes),
+// and the burst clock must stay alive across them so the paste never sheds
+// the lines that follow as separate sends.
+func TestRawPasteBlankLineKeepsGuardAlive(t *testing.T) {
+	m := newTestModel(80, 24)
+	m.input.SetValue("para one\n\n") // a blank line was just inserted
+	m.burstRunes = 20                // the paste already poured in several lines
+	m.lastKeyAt = time.Now().Add(-100 * time.Millisecond)
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.busy || len(m.blocks) != 0 {
+		t.Fatal("enter right after a blank paste line must not submit")
+	}
+	if strings.Count(m.input.Value(), "\n") != 3 {
+		t.Fatalf("newline should be appended, got %q", m.input.Value())
+	}
+}
+
+// A short line right after a burst-active submit rides the same paste: its
+// Enter joins the text instead of sending it as yet another fragment.
+func TestRawPasteShortLineAfterSubmitKeepsRiding(t *testing.T) {
+	m := newTestModel(80, 24)
+	m.input.SetValue("next")
+	m.burstRunes = 12
+	m.lastKeyAt = time.Now()
+	m.lastSubmitAt = time.Now().Add(-60 * time.Millisecond) // a paste line was just submitted
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.busy || len(m.blocks) != 0 {
+		t.Fatal("short line right after a burst submit must not send")
 	}
 }
 
