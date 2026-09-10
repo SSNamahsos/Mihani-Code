@@ -2,6 +2,11 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.2.30
+
+### Fixed
+- **A UTF-8 BOM in `config.json` prevented launch** with `invalid character 'ï' looking for beginning of value`. Editors on Windows (Notepad, PowerShell) commonly save the config with a BOM; the loader now strips it before parsing instead of dead-ending the app.
+
 ## v0.2.29
 
 ### Fixed

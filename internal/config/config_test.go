@@ -149,6 +149,27 @@ func TestLoadRenamesLegacyEndpointIDs(t *testing.T) {
 	}
 }
 
+// A UTF-8 BOM in config.json (Notepad / PowerShell are notorious for adding
+// one) must be tolerated, not dead-end the app at startup with
+// "invalid character 'ï' looking for beginning of value".
+func TestLoadToleratesBOM(t *testing.T) {
+	isolatedHome(t)
+	if err := os.MkdirAll(filepath.Dir(path()), 0700); err != nil {
+		t.Fatal(err)
+	}
+	bom := append([]byte{0xEF, 0xBB, 0xBF}, []byte(`{"version":1,"current_provider":"mihani","providers":{}}`)...)
+	if err := os.WriteFile(path(), bom, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("BOM'd config must load: %v", err)
+	}
+	if cfg.CurrentProvider != BuiltinPrimary {
+		t.Fatalf("current provider = %q, want %q", cfg.CurrentProvider, BuiltinPrimary)
+	}
+}
+
 func TestBudgetZeroMeansDefaultAndNegativeDisables(t *testing.T) {
 	cfg := Config{}
 	if cfg.Budget() != DefaultDailyBudgetUSD {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -142,6 +143,11 @@ func Load() (Config, error) {
 	if e != nil {
 		return c, e
 	}
+	// Tolerate a UTF-8 BOM. Windows editors are notorious for prepending one
+	// (Notepad "UTF-8 with BOM", PowerShell Set-Content -Encoding UTF8), and
+	// json.Unmarshal rejects it with "invalid character 'ï'" — which used to
+	// dead-end the entire app at startup until the file was hand-repaired.
+	b = bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF})
 	if e = json.Unmarshal(b, &c); e != nil {
 		return c, e
 	}
