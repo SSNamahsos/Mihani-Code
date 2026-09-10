@@ -65,7 +65,7 @@ func TestDefaultsContainShippedModels(t *testing.T) {
 	cfg := defaults()
 	want := map[string][]string{
 		BuiltinPrimary:   {"DeepSeek-V4-Pro", "step-3.7-flash", "glm-5.3-flash", "sensenova-6.8-flash-lite", "spark-x2.5"},
-		BuiltinSecondary: {"step-router-v1", "step-explore", "Qwen3.6-35B-A3B", "spark-x2.5", "kimi-k3"},
+		BuiltinSecondary: {"claude-sonnet-5", "claude-haiku-4-5", "gpt-5.6-luna"},
 	}
 	for id, models := range want {
 		got := cfg.Providers[id].Models

@@ -123,13 +123,10 @@ func defaults() Config {
 				Type:    "openai",
 				BaseURL: "https://api.placeholder.invalid/v1",
 				APIKey:  secrets.Secondary(),
-				// The upstream no longer serves any claude-* channel, so the
-				// previous lineup (claude-sonnet-5 et al) failed every turn
-				// with model_not_found. This lineup is verified live with
-				// native tool calling on the shipped gateway (2026-09-10);
-				// step-router-v1 leads because it answered fastest and
-				// kimi-k3's channel was flaky at probe time.
-				Models: []string{"step-router-v1", "step-explore", "Qwen3.6-35B-A3B", "spark-x2.5", "kimi-k3"},
+				// Mihani Pro rides the seekai upstream (its own gateway
+				// route): the Claude family this key's group serves. Tool
+				// calling is translated upstream; verified 2026-09-10.
+				Models: []string{"claude-sonnet-5", "claude-haiku-4-5", "gpt-5.6-luna"},
 			},
 		},
 	}

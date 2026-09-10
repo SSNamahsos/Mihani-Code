@@ -5,7 +5,7 @@ All notable changes to Mihani Code are documented here.
 ## v0.2.29
 
 ### Fixed
-- **Mihani Pro never worked — its models did not exist upstream.** Every turn on the Pro provider failed with `model_not_found` (the old claude-* lineup has no channel at the gateway). The Pro and Cloud model lists are now verified live against the gateway, and every listed model confirmed real native tool calling (Mihani Pro now defaults to `step-router-v1`). Existing configs with a removed model reset automatically on first launch.
+- **Mihani Pro and Mihani Cloud share one upstream's model lists no more.** The gateway's Pro route is back on the seekai upstream with its own key, and each built-in provider lists exactly what its own upstream serves: **Mihani Pro** = `claude-sonnet-5` (default), `claude-haiku-4-5`, `gpt-5.6-luna`; **Mihani Cloud** = `DeepSeek-V4-Pro` (default) + the hcnsec lineup, all verified with native tool calling. Existing configs with a removed model reset automatically on first launch.
 - **`-provider` no longer carries the old model across.** `mihani -provider mihani` after using Mihani Pro silently sent the Pro model to the Cloud endpoint — every turn died. Switching provider now switches to that provider's own model.
 - **A model with no upstream channel retried for ten minutes.** `model_not_found` / "No available channel" answers are recognized and fail immediately with a message telling you to pick another model with `/models`.
 - **The shipped gateway buffered streaming responses**, so long replies produced zero visible output until Cloudflare killed the request (~100 s) — mid-task reconnect loops. The worker now streams the upstream response through untouched.

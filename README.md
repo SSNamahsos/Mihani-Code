@@ -147,7 +147,7 @@ Mihani Code ships with two built-in backends presented under Mihani branding - e
 | Provider | Public label | Models |
 | --- | --- | --- |
 | `mihani` | Mihani Cloud | `DeepSeek-V4-Pro` *(default)*, `step-3.7-flash`, `glm-5.3-flash`, `sensenova-6.8-flash-lite`, `spark-x2.5` |
-| `mihani-pro` | Mihani Pro | `step-router-v1`, `step-explore`, `Qwen3.6-35B-A3B`, `spark-x2.5`, `kimi-k3` |
+| `mihani-pro` | Mihani Pro | `claude-sonnet-5` *(default)*, `claude-haiku-4-5`, `gpt-5.6-luna` |
 
 Switch with `/providers` and `/models`; `/connect` adds any other OpenAI-compatible endpoint under a name you choose. Upstream identifiers from earlier releases are renamed automatically on first launch and never shown in the UI.
 
