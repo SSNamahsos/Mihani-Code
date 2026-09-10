@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
@@ -151,7 +152,9 @@ func (m *Model) clearSelection() {
 // selectedText extracts plain text for the (possibly un-ordered) selection
 // range. Content lines are stripped of ANSI styles so the clipboard gets
 // clean text; box-drawn borders around cards are trimmed when the whole
-// interior line was selected.
+// interior line was selected. Columns are display columns (rune widths), not
+// bytes — indexing bytes used to garble every cut on non-ASCII output
+// (box-drawing borders, CJK text).
 func (m *Model) selectedText(a, h selPos) string {
 	if len(m.renderedLines) == 0 {
 		return ""
@@ -169,18 +172,14 @@ func (m *Model) selectedText(a, h selPos) string {
 	var out []string
 	for i := r1; i <= r2; i++ {
 		line := stripANSI(m.renderedLines[i])
-		start, end := 0, len(line)
+		start, end := 0, lipgloss.Width(line)
 		if i == r1 {
-			start = c1
+			_, tail := plainCutDisplay(line, c1)
+			start = len(line) - len(tail)
 		}
 		if i == r2 {
-			end = c2
-		}
-		if start < 0 {
-			start = 0
-		}
-		if end > len(line) {
-			end = len(line)
+			_, tail := plainCutDisplay(line, c2)
+			end = len(line) - len(tail)
 		}
 		if start >= end {
 			continue
@@ -194,6 +193,22 @@ func (m *Model) selectedText(a, h selPos) string {
 	}
 	text := strings.TrimRight(strings.Join(out, "\n"), " \t")
 	return text
+}
+
+// plainCutDisplay splits ANSI-free text at a display column, respecting rune
+// widths (a wide CJK glyph occupies two columns; a combining mark zero).
+func plainCutDisplay(s string, col int) (string, string) {
+	if col <= 0 {
+		return "", s
+	}
+	w := 0
+	for i, r := range s {
+		if w >= col {
+			return s[:i], s[i:]
+		}
+		w += lipgloss.Width(string(r))
+	}
+	return s, ""
 }
 
 // highlightSelection paints the selected range in the styled transcript.
@@ -230,8 +245,9 @@ func highlightSelection(lines []string, a, h selPos) []string {
 	return lines
 }
 
-// splitDisplay cuts s at display column col, skipping ANSI escape sequences
-// (zero display width). Returns the part before and the part from that column.
+// splitDisplay cuts a styled string at a display column, skipping ANSI escape
+// sequences (zero display width) and respecting rune widths. Returns the part
+// before and the part from that column.
 func splitDisplay(s string, col int) (string, string) {
 	if col <= 0 {
 		return "", s
@@ -240,8 +256,15 @@ func splitDisplay(s string, col int) (string, string) {
 	for i := 0; i < len(s); {
 		r := s[i]
 		if r == 0x1b {
+			// Escape sequence: skip the introducer ([ ] P X ^ _), then all
+			// parameter/intermediate bytes (0x20-0x3F), up to and including
+			// the final byte (0x40-0x7E). Stopping at the introducer itself
+			// (it is inside 0x40-0x7E) used to count "[31m" as display text.
 			j := i + 1
-			for j < len(s) && !(s[j] >= 0x40 && s[j] <= 0x7e) {
+			if j < len(s) && (s[j] == '[' || s[j] == ']' || s[j] == 'P' || s[j] == 'X' || s[j] == '^' || s[j] == '_') {
+				j++
+			}
+			for j < len(s) && (s[j] < 0x40 || s[j] > 0x7e) {
 				j++
 			}
 			if j < len(s) {
@@ -250,8 +273,14 @@ func splitDisplay(s string, col int) (string, string) {
 			}
 			// Unterminated escape: treat as a normal byte.
 		}
-		c++
-		i++
+		size := 1
+		if r >= 0x80 {
+			if _, n := utf8.DecodeRuneInString(s[i:]); n > 1 {
+				size = n
+			}
+		}
+		c += lipgloss.Width(s[i : i+size])
+		i += size
 		if c >= col {
 			return s[:i], s[i:]
 		}

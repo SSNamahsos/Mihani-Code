@@ -99,14 +99,14 @@ mihani --version
 | `ctrl+j` / `alt+enter` | newline inside the composer (long lines wrap upward) |
 | `/` ... | type to filter the command palette |
 | `tab` / `shift+tab` | cycle modes (navigate the palette when it is open) |
-| `↑` / `↓` / `mouse wheel` / `pgup` / `pgdn` | scroll the transcript (arrows stay in the composer while it is multiline) |
-| **click a message** | open Revert / Fork / Copy actions for it |
-| *select with mouse* | drag anywhere in the transcript to select - selection survives scrolling; release auto-copies to the clipboard |
+| `↑` / `↓` / `pgup` / `pgdn` | scroll the transcript (arrows stay in the composer while it is multiline) |
+| *select with mouse* | select text with your terminal's own drag selection (native, always works - it auto-copies in Windows Terminal) |
+| `[` / `]` on a message | keyboard menu: Copy / Fork / Revert for that message |
 | `ctrl+y` or `/copy` | copy Mihani's last reply to the clipboard - toast confirmation |
 | `esc` | interrupt request (press **twice** to terminate); otherwise clear input / close overlays |
 | `ctrl+c` | cancel request → deny pending approval → quit |
 
-Launching opens a fresh **home page / new season**; switch to past conversations with `/seasons` (aliases `/resume`, `/sessions`). Mouse capture is **on by default** (click menus + app-level drag selection above) on modern terminals; on the legacy Windows console (conhost) it defaults **off** because its mouse input is unreliable - there use drag-select plus `[` / `]` on a message for the action menu. Check or override at runtime: `/mouse` shows the state, and `"use_mouse": true/false` in `config.json` forces it.
+Launching opens a fresh **home page / new season**; switch to past conversations with `/seasons` (aliases `/resume`, `/sessions`). Mouse capture defaults **off** so your terminal's native drag selection always works (same as opencode). If you prefer click menus and in-app drag selection instead, run `/mouse` (toggles live and remembers), or set `"use_mouse": true` in `config.json`.
 
 While a turn is running you can keep typing: additional prompts are queued and sent automatically when the turn completes.
 

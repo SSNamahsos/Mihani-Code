@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/SSNamahsos/Mihani-Code/internal/pricing"
@@ -68,7 +67,7 @@ type Config struct {
 	BudgetUSD       float64                  `json:"budget_usd,omitempty"`
 	Pricing         map[string]pricing.Entry `json:"pricing,omitempty"`
 	AutoConfirm     bool                     `json:"auto_confirm"`
-	UseMouse        *bool                    `json:"use_mouse,omitempty"` // nil = mouse on (click menus + drag select); false = native terminal selection only
+	UseMouse        *bool                    `json:"use_mouse,omitempty"` // nil = off: the terminal handles text selection natively (always works); true = capture the mouse for click menus + in-app drag select
 	PlainUI         bool                     `json:"plain_ui,omitempty"` // true = ASCII borders + spinner (for terminals whose font lacks box-drawing/braille glyphs)
 	MaxIterations   int                      `json:"max_iterations,omitempty"`
 	Workspace       string                   `json:"workspace,omitempty"`
@@ -424,36 +423,18 @@ func (c Config) IsBuiltinProvider(name string) bool {
 	return name == BuiltinPrimary || name == BuiltinSecondary
 }
 
-// MouseEnabled reports whether the TUI captures the mouse (click action
-// menus + app-level drag selection). Explicit use_mouse in config always
-// wins; otherwise the default is ON, except on the legacy Windows console
-// (conhost) whose mouse input is unreliable — there native selection and
-// the [ ] keyboard message menu are kept instead.
+// MouseEnabled reports whether the TUI should capture the mouse. Capturing
+// enables click action menus and in-app drag selection, but it also disables
+// the terminal's NATIVE text selection — and on some consoles (notably the
+// legacy Windows console) mouse reporting is unreliable, which used to leave
+// users unable to select anything at all. So the default is now OFF: the
+// terminal's native selection always works, exactly like opencode. Opt in
+// with "use_mouse": true in config.json or /mouse inside the app.
 func (c Config) MouseEnabled() bool {
 	if c.UseMouse != nil {
 		return *c.UseMouse
 	}
-	return !legacyWindowsConsole()
-}
-
-// legacyWindowsConsole reports the classic conhost (no Windows Terminal, no
-// ConEmu/Cmder, no VSCode/Alacritty/kitty/ghostty integration).
-func legacyWindowsConsole() bool {
-	if runtime.GOOS != "windows" {
-		return false
-	}
-	if os.Getenv("WT_SESSION") != "" || // Windows Terminal
-		os.Getenv("TERM_PROGRAM") != "" || // VSCode, iTerm, ghostty, wezterm...
-		os.Getenv("CONEMUCMD") != "" || // ConEmu / cmder
-		os.Getenv("ConEmuANSI") != "" ||
-		os.Getenv("ALACRITTY_LOG") != "" ||
-		os.Getenv("KITTY_WINDOW_ID") != "" {
-		return false
-	}
-	if strings.Contains(strings.ToLower(os.Getenv("TERM")), "xterm") {
-		return false
-	}
-	return true
+	return false
 }
 
 // BudgetEnforced returns the daily cap for the active provider, or 0 when no

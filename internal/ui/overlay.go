@@ -484,13 +484,29 @@ func (m *Model) command(s string) tea.Cmd {
 		m.appendBlock(&block{kind: blockInfo, content: result})
 
 	case "/mouse":
-		state := "off - native terminal selection, no click menus"
-		if m.cfg.MouseEnabled() {
-			state = "on - click a message for actions, drag to select (release copies)"
+		// Toggle mouse capture live. Capture enables click menus + in-app
+		// drag select but disables the terminal's native text selection —
+		// the default stays OFF so selection always works.
+		next := !m.cfg.MouseEnabled()
+		m.cfg.UseMouse = &next
+		if m.program != nil {
+			if next {
+				m.program.EnableMouseCellMotion()
+			} else {
+				m.program.DisableMouseCellMotion()
+			}
+		}
+		if err := m.cfg.Save(); err != nil {
+			m.appendBlock(&block{kind: blockError, content: "could not save setting: " + err.Error()})
+			return nil
+		}
+		state := "off — select text with the terminal's own drag (always works); click menus are keyboard-only ([ and ])"
+		if next {
+			state = "on — click a message for actions, drag to select (release copies); the terminal's native selection is disabled while captured"
 		}
 		m.appendBlock(&block{kind: blockInfo,
 			content: "mouse capture: " + state + "\n" +
-				"To change: set \"use_mouse\": true (or false) in ~/.mihani/config.json, then restart mihani."})
+				"Saved to config.json. Run /mouse again to toggle it back."})
 
 	case "/copy":
 		if cmd := m.copyLastReply(); cmd != nil {

@@ -9,6 +9,7 @@ All notable changes to Mihani Code are documented here.
 - **`-provider` no longer carries the old model across.** `mihani -provider mihani` after using Mihani Pro silently sent the Pro model to the Cloud endpoint — every turn died. Switching provider now switches to that provider's own model.
 - **A model with no upstream channel retried for ten minutes.** `model_not_found` / "No available channel" answers are recognized and fail immediately with a message telling you to pick another model with `/models`.
 - **The shipped gateway buffered streaming responses**, so long replies produced zero visible output until Cloudflare killed the request (~100 s) — mid-task reconnect loops. The worker now streams the upstream response through untouched.
+- **Text selection now works everywhere.** Mouse capture used to be on by default, and because capturing the mouse disables the terminal's own selection (and mouse reporting is unreliable on some consoles), dragging could select nothing at all. Capture now defaults **off** — select text with your terminal's native drag, exactly like opencode. `/mouse` toggles the click-menu mode live; `"use_mouse": true` in config.json keeps it permanently. In-app selection also fixed for non-ASCII content (selection columns were byte offsets, garbling CJK/box-drawing text).
 
 ### Added
 - **`/init`** — analyzes the project and writes `.mihani.md` project instructions (build/test commands, layout, conventions) that every future session reads automatically.

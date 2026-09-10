@@ -108,7 +108,7 @@ var commands = []commandItem{
 	{name: "/mcp", description: "Show configured MCP servers"},
 	{name: "/skills", description: "List installed skills (auto-loaded by the AI)"},
 	{name: "/undo", description: "Restore the latest Mihani file snapshot"},
-	{name: "/mouse", description: "Show mouse capture state (click menus / drag select)"},
+	{name: "/mouse", description: "Toggle mouse capture (off = native terminal text selection)"},
 	{name: "/settings", description: "Open Mihani settings"},
 	{name: "/update", description: "Check for a newer Mihani Code and install it"},
 	{name: "/export", description: "Export conversation as markdown or JSON"},
@@ -541,10 +541,10 @@ func shortID(id string) string {
 	return id
 }
 
-// Run starts the interactive TUI. Mouse capture is ON by default so message
-// action menus (click) and app-level drag selection work everywhere; the
-// terminal's native selection is disabled while mouse capture is active.
-// Set config use_mouse=false to restore native drag-select (click menus off).
+// Run starts the interactive TUI. Mouse capture is OFF by default so the
+// terminal's own text selection always works (it is disabled while capture
+// is active). Opt in with "use_mouse": true in config.json or /mouse in-app
+// to get click action menus + in-app drag selection instead.
 func Run(cfg config.Config, version, resumeID, initialPrompt string) error {
 	mouseDebugProbe(version, cfg.MouseEnabled(), cfg.UseMouse != nil)
 	m, err := New(cfg, version, resumeID, initialPrompt)
