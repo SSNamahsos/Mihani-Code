@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"net/http"
 	"net/url"
@@ -25,31 +29,107 @@ type Tool struct {
 	Schema            map[string]any
 }
 
+// Canonical tool names. Every tool the agent exposes is Mihani-branded:
+// Mihani_Read_File, Mihani_Write_File, … Constants keep call sites honest.
+const (
+	ToolReadFile    = "Mihani_Read_File"
+	ToolListDir     = "Mihani_List_Dir"
+	ToolSearchFiles = "Mihani_Search_Files"
+	ToolGrep        = "Mihani_Grep"
+	ToolWriteFile   = "Mihani_Write_File"
+	ToolEditFile    = "Mihani_Edit_File"
+	ToolDeleteFile  = "Mihani_Delete_File"
+	ToolAskUser     = "Mihani_Ask_User"
+	ToolTodoWrite   = "Mihani_Todo_Write"
+	ToolBash        = "Mihani_Bash"
+	ToolWebSearch   = "Mihani_Web_Search"
+	ToolWebFetch    = "Mihani_Web_Fetch"
+	ToolGlob        = "Mihani_Glob"
+	ToolImageReader = "Mihani_Image_Reader"
+)
+
+// legacyNames maps pre-v0.3.0 tool names (and any case variant of the new
+// ones) to their canonical Mihani_* spelling, so restored sessions, older
+// models, and stray inputs keep resolving to the right tool.
+var legacyNames = map[string]string{
+	"read_file":    ToolReadFile,
+	"list_dir":     ToolListDir,
+	"search_files": ToolSearchFiles,
+	"grep":         ToolGrep,
+	"write_file":   ToolWriteFile,
+	"edit_file":    ToolEditFile,
+	"delete_file":  ToolDeleteFile,
+	"ask_user":     ToolAskUser,
+	"todo_write":   ToolTodoWrite,
+	"bash":         ToolBash,
+	"web_search":   ToolWebSearch,
+	"web_fetch":    ToolWebFetch,
+	"glob":         ToolGlob,
+	"image_reader": ToolImageReader,
+	"mihani_read_file":    ToolReadFile,
+	"mihani_list_dir":     ToolListDir,
+	"mihani_search_files": ToolSearchFiles,
+	"mihani_grep":         ToolGrep,
+	"mihani_write_file":   ToolWriteFile,
+	"mihani_edit_file":    ToolEditFile,
+	"mihani_delete_file":  ToolDeleteFile,
+	"mihani_ask_user":     ToolAskUser,
+	"mihani_todo_write":   ToolTodoWrite,
+	"mihani_bash":         ToolBash,
+	"mihani_web_search":   ToolWebSearch,
+	"mihani_web_fetch":    ToolWebFetch,
+	"mihani_glob":         ToolGlob,
+	"mihani_image_reader": ToolImageReader,
+}
+
+// LegacyNames exposes the pre-rename tool names so call-format detectors can
+// also recognize older spellings a model might emit.
+func LegacyNames() map[string]string { return legacyNames }
+
+// Normalize resolves any spelling of a tool name — legacy pre-rename names,
+// wrong case — to its canonical Mihani_* form. MCP names (mcp.server.tool)
+// pass through untouched.
+func Normalize(name string) string {
+	if strings.HasPrefix(name, "mcp.") {
+		return name
+	}
+	if canonical, ok := legacyNames[strings.ToLower(strings.TrimSpace(name))]; ok {
+		return canonical
+	}
+	return name
+}
+
 var Registry = []Tool{
-	{Name: "read_file", Description: "Read a text file one page at a time. Pass offset (1-based start line) and limit (max lines, default 400) to read any range; every result reports the file's total line count so you can read the whole file by paging (e.g. offset 1..”N/2“ repeatedly), and a half by starting at total/2. Read large files as several windows instead of relying on a single read.", Schema: objectSchema(map[string]any{
+	{Name: ToolReadFile, Description: "Read a text file one page at a time. Pass offset (1-based start line) and limit (max lines, default 400) to read any range; every result reports the file's total line count so you can read the whole file by paging (e.g. offset 1..”N/2“ repeatedly), and a half by starting at total/2. Read large files as several windows instead of relying on a single read.", Schema: objectSchema(map[string]any{
 		"path":   stringProperty("Path to the file"),
 		"offset": map[string]any{"type": "integer", "description": "1-based line number to start reading from (optional)"},
 		"limit":  map[string]any{"type": "integer", "description": "Maximum number of lines to read (optional, default 400)"},
 	}, "path")},
-	{Name: "list_dir", Description: "List files in a directory", Schema: objectSchema(map[string]any{"path": stringProperty("Directory path")}, "")},
-	{Name: "search_files", Description: "Search text in project files", Schema: objectSchema(map[string]any{"pattern": stringProperty("Text to search"), "path": stringProperty("Directory path")}, "pattern")},
-	{Name: "write_file", Description: "Create or overwrite a file", Dangerous: true, Schema: objectSchema(map[string]any{"path": stringProperty("Path to the file"), "content": stringProperty("Complete file content")}, "path", "content")},
-	{Name: "edit_file", Description: "Replace one exact block in a file", Dangerous: true, Schema: objectSchema(map[string]any{"path": stringProperty("Path to the file"), "old_str": stringProperty("Unique text to replace"), "new_str": stringProperty("Replacement text")}, "path", "old_str", "new_str")},
-	{Name: "delete_file", Description: "Delete a file, or an entire directory including everything inside it (recursive). Always prefer this over bash rm/del/rmdir for deletions. Requires user approval.", Dangerous: true, Schema: objectSchema(map[string]any{"path": stringProperty("Path of the file or directory to delete")}, "path")},
-	{Name: "ask_user", Description: "Ask the user a question mid-task and wait for their answer. The question is shown in the terminal as a menu: pick one of your options or type a custom answer. Use it whenever you genuinely need a user decision — ambiguous requirements, preferences, or a choice between approaches. You may ask several questions in a row; each answer is returned to you.", Schema: objectSchema(map[string]any{
+	{Name: ToolListDir, Description: "List files in a directory", Schema: objectSchema(map[string]any{"path": stringProperty("Directory path")}, "")},
+	{Name: ToolSearchFiles, Description: "Search text in project files", Schema: objectSchema(map[string]any{"pattern": stringProperty("Text to search"), "path": stringProperty("Directory path")}, "pattern")},
+	{Name: ToolGrep, Description: "Search project files with a regular expression and get the actual matches back as path:line: text — the fast way to find where something lives before reading the file. Skips vendored/build directories and binary files.", Schema: objectSchema(map[string]any{
+		"pattern": stringProperty("Regular expression (Go syntax), e.g. func \\w+\\("),
+		"path":    stringProperty("Directory or file to search in (optional, default workspace root)"),
+		"ignore_case": map[string]any{"type": "boolean", "description": "Case-insensitive match (optional, default false)"},
+	}, "pattern")},
+	{Name: ToolWriteFile, Description: "Create or overwrite a file", Dangerous: true, Schema: objectSchema(map[string]any{"path": stringProperty("Path to the file"), "content": stringProperty("Complete file content")}, "path", "content")},
+	{Name: ToolEditFile, Description: "Replace one exact block in a file", Dangerous: true, Schema: objectSchema(map[string]any{"path": stringProperty("Path to the file"), "old_str": stringProperty("Unique text to replace"), "new_str": stringProperty("Replacement text")}, "path", "old_str", "new_str")},
+	{Name: ToolDeleteFile, Description: "Delete a file, or an entire directory including everything inside it (recursive). Always prefer this over bash rm/del/rmdir for deletions. Requires user approval.", Dangerous: true, Schema: objectSchema(map[string]any{"path": stringProperty("Path of the file or directory to delete")}, "path")},
+	{Name: ToolAskUser, Description: "Ask the user a question mid-task and wait for their answer. The question is shown in the terminal as a menu: pick one of your options or type a custom answer. Use it whenever you genuinely need a user decision — ambiguous requirements, preferences, or a choice between approaches. You may ask several questions in a row; each answer is returned to you.", Schema: objectSchema(map[string]any{
 		"question": stringProperty("The question to ask the user"),
 		"options":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Short answer choices to show as menu items (0-6). Omit for a free-text question."},
 	}, "question")},
-	{Name: "todo_write", Description: "Create or update the task list the user watches in the terminal. Send the FULL current list every call (statuses: pending, in_progress, done). Use it for multi-step work so the user sees what is done, running, and next; update statuses as you progress and mark items done the moment they are verified.", Schema: objectSchema(map[string]any{
+	{Name: ToolTodoWrite, Description: "Create or update the task list the user watches in the terminal. Send the FULL current list every call (statuses: pending, in_progress, done). Use it for multi-step work so the user sees what is done, running, and next; update statuses as you progress and mark items done the moment they are verified.", Schema: objectSchema(map[string]any{
 		"todos": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{
 			"content": stringProperty("Task description"),
 			"status":  map[string]any{"type": "string", "enum": []any{"pending", "in_progress", "done"}, "description": "pending | in_progress | done"},
 		}, "required": []any{"content"}}, "description": "The complete todo list, in order."},
 	}, "todos")},
-	{Name: "bash", Description: "Run a shell command in the workspace. On Windows the command executes with cmd.exe (batch syntax: &&, for %var in (...) do, dir); on Unix it runs in sh/bash. Commands time out after 60 seconds by default; pass timeout (seconds, max 300) for long-running work like downloads or builds.", Dangerous: true, Schema: objectSchema(map[string]any{"command": stringProperty("Command to execute"), "timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (optional, default 60, max 300)"}}, "command")},
-	{Name: "web_search", Description: "Search the web and get top results (title, url, snippet). Use it to find sources, article pages, image URLs, or current information, then open a specific result with web_fetch.", Schema: objectSchema(map[string]any{"query": stringProperty("Search query")}, "query")},
-	{Name: "web_fetch", Description: "Fetch a URL and return its content as text (HTML is stripped to readable text, capped at 40KB). Pass save_to (a workspace-relative path) to download the raw bytes to a file instead — use that for images, e.g. save_to \"img/coffee.jpg\" from a direct image URL.", Schema: objectSchema(map[string]any{"url": stringProperty("URL to fetch (http/https)"), "save_to": map[string]any{"type": "string", "description": "Optional workspace-relative path to save the raw response to (e.g. an image)"}}, "url")},
-	{Name: "glob", Description: "Find files by glob pattern relative to the workspace, e.g. \"**/*.go\", \"src/**/*.ts\", \"*.png\". Returns matching relative paths (directories listed too, suffixed /).", Schema: objectSchema(map[string]any{"pattern": stringProperty("Glob pattern, e.g. **/*.go"), "path": stringProperty("Subdirectory to search in (optional, default workspace root)")}, "pattern")},
+	{Name: ToolBash, Description: "Run a shell command in the workspace. On Windows the command executes with cmd.exe (batch syntax: &&, for %var in (...) do, dir); on Unix it runs in sh/bash. Commands time out after 60 seconds by default; pass timeout (seconds, max 300) for long-running work like downloads or builds.", Dangerous: true, Schema: objectSchema(map[string]any{"command": stringProperty("Command to execute"), "timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (optional, default 60, max 300)"}}, "command")},
+	{Name: ToolWebSearch, Description: "Search the web and get top results (title, url, snippet). Use it to find sources, article pages, image URLs, or current information, then open a specific result with Mihani_Web_Fetch.", Schema: objectSchema(map[string]any{"query": stringProperty("Search query")}, "query")},
+	{Name: ToolWebFetch, Description: "Fetch a URL and return its content as text (HTML is stripped to readable text, capped at 40KB). Pass save_to (a workspace-relative path) to download the raw bytes to a file instead — use that for images, e.g. save_to \"img/coffee.jpg\" from a direct image URL.", Schema: objectSchema(map[string]any{"url": stringProperty("URL to fetch (http/https)"), "save_to": map[string]any{"type": "string", "description": "Optional workspace-relative path to save the raw response to (e.g. an image)"}}, "url")},
+	{Name: ToolGlob, Description: "Find files by glob pattern relative to the workspace, e.g. \"**/*.go\", \"src/**/*.ts\", \"*.png\". Returns matching relative paths (directories listed too, suffixed /).", Schema: objectSchema(map[string]any{"pattern": stringProperty("Glob pattern, e.g. **/*.go"), "path": stringProperty("Subdirectory to search in (optional, default workspace root)")}, "pattern")},
+	{Name: ToolImageReader, Description: "Inspect an image file without opening it in a viewer: returns the format (png/jpeg/gif), pixel dimensions, and byte size. Use it to check screenshots and image assets before referencing or resizing them.", Schema: objectSchema(map[string]any{"path": stringProperty("Path to the image file")}, "path")},
 }
 
 func stringProperty(description string) map[string]any {
@@ -63,6 +143,7 @@ func objectSchema(properties map[string]any, required ...string) map[string]any 
 	return schema
 }
 func Lookup(name string) Tool {
+	name = Normalize(name)
 	for _, tool := range Registry {
 		if tool.Name == name {
 			return tool
@@ -88,9 +169,10 @@ func (r Runner) path(name string) (string, error) {
 	}
 	return a, nil
 }
-func (r Runner) Run(ctx context.Context, name string, in map[string]any) string {
+func (r Runner) Run(ctx context.Context, rawName string, in map[string]any) string {
+	name := Normalize(rawName)
 	switch name {
-	case "read_file":
+	case ToolReadFile:
 		p, e := r.path(fmt.Sprint(in["path"]))
 		if e != nil {
 			return "ERROR: " + e.Error()
@@ -129,7 +211,7 @@ func (r Runner) Run(ctx context.Context, name string, in map[string]any) string 
 			footer += fmt.Sprintf(" (half point: offset %d)", total/2)
 		}
 		return page + footer
-	case "list_dir":
+	case ToolListDir:
 		p := fmt.Sprint(in["path"])
 		if p == "<nil>" || p == "" {
 			p = "."
@@ -151,7 +233,7 @@ func (r Runner) Run(ctx context.Context, name string, in map[string]any) string 
 			out = append(out, n)
 		}
 		return strings.Join(out, "\n")
-	case "search_files":
+	case ToolSearchFiles:
 		root := fmt.Sprint(in["path"])
 		if root == "<nil>" || root == "" {
 			root = "."
@@ -192,7 +274,7 @@ func (r Runner) Run(ctx context.Context, name string, in map[string]any) string 
 			return "No matches found."
 		}
 		return limit(strings.Join(out, "\n"), 8000)
-	case "write_file":
+	case ToolWriteFile:
 		p, e := r.path(fmt.Sprint(in["path"]))
 		if e != nil {
 			return "ERROR: " + e.Error()
@@ -207,7 +289,7 @@ func (r Runner) Run(ctx context.Context, name string, in map[string]any) string 
 			return "ERROR: " + e.Error()
 		}
 		return "OK: wrote " + p
-	case "edit_file":
+	case ToolEditFile:
 		p, e := r.path(fmt.Sprint(in["path"]))
 		if e != nil {
 			return "ERROR: " + e.Error()
@@ -226,7 +308,7 @@ func (r Runner) Run(ctx context.Context, name string, in map[string]any) string 
 			return "ERROR: snapshot failed: " + e.Error()
 		}
 		return writeEdit(p, updated, count)
-	case "delete_file":
+	case ToolDeleteFile:
 		p, e := r.path(fmt.Sprint(in["path"]))
 		if e != nil {
 			return "ERROR: " + e.Error()
@@ -251,13 +333,13 @@ func (r Runner) Run(ctx context.Context, name string, in map[string]any) string 
 			return "ERROR: " + e.Error()
 		}
 		return "OK: deleted " + p
-	case "todo_write":
+	case ToolTodoWrite:
 		list, e := ParseTodoList(in["todos"])
 		if e != nil {
 			return "ERROR: " + e.Error()
 		}
 		return "OK: " + FormatTodoList(list)
-	case "bash":
+	case ToolBash:
 		timeoutSec := 60
 		if t := intInput(in, "timeout"); t > 0 {
 			if t > 300 {
@@ -286,11 +368,15 @@ func (r Runner) Run(ctx context.Context, name string, in map[string]any) string 
 			return fmt.Sprintf("%s\n(exit: %v)", limit(string(b), 10000), e)
 		}
 		return limit(string(b), 10000)
-	case "glob":
+	case ToolGlob:
 		return runGlob(r.Root, in)
-	case "web_search":
+	case ToolGrep:
+		return runGrep(r.Root, in)
+	case ToolImageReader:
+		return runImageRead(r, in)
+	case ToolWebSearch:
 		return runWebSearch(ctx, in)
-	case "web_fetch":
+	case ToolWebFetch:
 		return runWebFetch(ctx, r, in)
 	default:
 		return "ERROR: unknown tool " + name
@@ -380,7 +466,7 @@ func limit(s string, n int) string {
 
 const maxSearchFileSize = 512 * 1024
 
-// Todo list support (todo_write tool): one self-contained task entry.
+// Todo list support (Mihani_Todo_Write tool): one self-contained task entry.
 type Todo struct {
 	Content string
 	Status  string // pending | in_progress | done
@@ -475,8 +561,9 @@ func min(a, b int) int {
 	return b
 }
 
-func Preview(name string, in map[string]any, root string) string {
-	if name != "write_file" && name != "edit_file" && name != "delete_file" {
+func Preview(rawName string, in map[string]any, root string) string {
+	name := Normalize(rawName)
+	if name != ToolWriteFile && name != ToolEditFile && name != ToolDeleteFile {
 		return ""
 	}
 	path := fmt.Sprint(in["path"])
@@ -487,14 +574,14 @@ func Preview(name string, in map[string]any, root string) string {
 	before := string(old)
 	after := before
 	switch name {
-	case "write_file":
+	case ToolWriteFile:
 		after = fmt.Sprint(in["content"])
-	case "edit_file":
+	case ToolEditFile:
 		oldStr, newStr := fmt.Sprint(in["old_str"]), fmt.Sprint(in["new_str"])
 		if updated, count, err := applyReplacement(before, oldStr, newStr); err == nil && count == 1 {
 			after = updated
 		}
-	case "delete_file":
+	case ToolDeleteFile:
 		after = ""
 	}
 	if before == after {
@@ -645,6 +732,102 @@ func runGlob(root string, in map[string]any) string {
 		return "No files match " + pat
 	}
 	return limit(strings.Join(out, "\n"), 8000)
+}
+
+// runGrep searches files with a regular expression and returns the matches as
+// path:line: text so the model can jump straight to the right spot. Skips
+// vendored/build directories and binary files; caps the result set.
+func runGrep(root string, in map[string]any) string {
+	pat := fmt.Sprint(in["pattern"])
+	if pat == "" || pat == "<nil>" {
+		return "ERROR: missing grep pattern"
+	}
+	if ignoreCase, ok := in["ignore_case"].(bool); ok && ignoreCase {
+		pat = "(?i)" + pat
+	}
+	re, err := regexp.Compile(pat)
+	if err != nil {
+		return "ERROR: invalid regular expression: " + err.Error()
+	}
+	target := "."
+	if v := fmt.Sprint(in["path"]); v != "" && v != "<nil>" {
+		target = v
+	}
+	abs, err := filepath.Abs(filepath.Join(root, target))
+	if err != nil {
+		return "ERROR: " + err.Error()
+	}
+	if rel, err := filepath.Rel(root, abs); err == nil && (rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+		return "ERROR: path is outside workspace"
+	}
+	const maxMatches = 200
+	var out []string
+	found := 0
+	searchErr := filepath.Walk(abs, func(p string, i os.FileInfo, werr error) error {
+		if werr != nil || i == nil {
+			return nil
+		}
+		if i.IsDir() {
+			if skipDirs[i.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if i.Size() > maxSearchFileSize {
+			return nil
+		}
+		b, er := os.ReadFile(p)
+		if er != nil || isBinary(b) {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, p)
+		for n, line := range strings.Split(normalizeNewlines(string(b)), "\n") {
+			if re.MatchString(line) {
+				out = append(out, fmt.Sprintf("%s:%d: %s", rel, n+1, strings.TrimSpace(line)))
+				found++
+				if found >= maxMatches {
+					return filepath.SkipAll
+				}
+			}
+		}
+		return nil
+	})
+	if searchErr != nil {
+		return "ERROR: " + searchErr.Error()
+	}
+	if len(out) == 0 {
+		return "No matches for " + pat
+	}
+	if found >= maxMatches {
+		out = append(out, fmt.Sprintf("… stopped at %d matches — narrow the pattern", maxMatches))
+	}
+	return limit(strings.Join(out, "\n"), 12000)
+}
+
+// runImageRead reports an image file's format, pixel dimensions, and size by
+// decoding its header — enough to sanity-check screenshots and assets (or to
+// pick the right tool next) without any viewer.
+func runImageRead(r Runner, in map[string]any) string {
+	raw := fmt.Sprint(in["path"])
+	p, err := r.path(raw)
+	if err != nil {
+		return "ERROR: " + err.Error()
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return "ERROR: " + err.Error()
+	}
+	defer f.Close()
+	cfg, format, err := image.DecodeConfig(f)
+	if err != nil {
+		return "ERROR: not a readable image (png, jpeg, gif): " + err.Error()
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		return "ERROR: " + err.Error()
+	}
+	megapixels := float64(cfg.Width) * float64(cfg.Height) / 1_000_000
+	return fmt.Sprintf("%s: %s %dx%d (%.2f MP, %d bytes)", filepath.Base(p), format, cfg.Width, cfg.Height, megapixels, info.Size())
 }
 
 // webSearch results: DuckDuckGo's HTML endpoint (no API key needed).

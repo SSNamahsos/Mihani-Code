@@ -2,6 +2,8 @@ package agent
 
 import (
 	"testing"
+
+	"github.com/SSNamahsos/Mihani-Code/internal/tools"
 )
 
 // The exact (malformed) tool call the user reported: an aliased tag
@@ -58,7 +60,7 @@ func TestResearchModeAllowsWriting(t *testing.T) {
 // build and research keep the full set. Verified across the native, anthropic,
 // and prompt-based tool listings.
 func TestModeGatesFileTools(t *testing.T) {
-	fileTools := []string{"write_file", "edit_file", "delete_file", "bash"}
+	fileTools := []string{tools.ToolWriteFile, tools.ToolEditFile, tools.ToolDeleteFile, tools.ToolBash}
 	has := func(list []map[string]any, name string) bool {
 		for _, m := range list {
 			if n, _ := m["name"].(string); n == name {
@@ -92,11 +94,11 @@ func TestModeGatesFileTools(t *testing.T) {
 			}
 		}
 		// Non-file tools stay available.
-		if a.hidesTool("read_file") || a.hidesTool("ask_user") || a.hidesTool("web_search") {
+		if a.hidesTool(tools.ToolReadFile) || a.hidesTool(tools.ToolAskUser) || a.hidesTool(tools.ToolWebSearch) {
 			t.Fatalf("mode %s must keep read/search/ask tools", ro)
 		}
-		if !has(a.openAITools(), "read_file") || !hasEntry(a, "read_file") {
-			t.Fatalf("mode %s should still list read_file", ro)
+		if !has(a.openAITools(), tools.ToolReadFile) || !hasEntry(a, tools.ToolReadFile) {
+			t.Fatalf("mode %s should still list %s", ro, tools.ToolReadFile)
 		}
 	}
 

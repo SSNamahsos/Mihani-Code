@@ -18,8 +18,10 @@ import (
 
 	"github.com/SSNamahsos/Mihani-Code/internal/agent"
 	"github.com/SSNamahsos/Mihani-Code/internal/config"
+	"github.com/SSNamahsos/Mihani-Code/internal/gitx"
 	"github.com/SSNamahsos/Mihani-Code/internal/secrets"
 	"github.com/SSNamahsos/Mihani-Code/internal/session"
+	"github.com/SSNamahsos/Mihani-Code/internal/tools"
 	"github.com/SSNamahsos/Mihani-Code/internal/update"
 	"github.com/SSNamahsos/Mihani-Code/internal/usage"
 )
@@ -98,6 +100,7 @@ var commands = []commandItem{
 	{name: "/copy", description: "Copy Mihani's last reply to the clipboard"},
 	{name: "/effort", description: "Set reasoning effort for the active model (ctrl+r cycles it)"},
 	{name: "/mode", description: "Switch between build, plan, research, and ask"},
+	{name: "/mihani", description: "Toggle Mihani Mode - tools run without asking (Shift+Tab)"},
 	{name: "/providers", description: "Show configured AI providers"},
 	{name: "/models", description: "Show models for the active provider"},
 	{name: "/refresh", description: "Re-fetch model lists for custom providers"},
@@ -195,6 +198,8 @@ type Model struct {
 
 	sessionID    string
 	modeIndex    int
+	mihaniMode   bool // Shift+Tab no-interruptions mode: dangerous tools run without asking
+	branch       string // git branch shown in the status bar / welcome (refreshed per turn)
 	commandIndex int
 	quitting     bool
 
@@ -279,9 +284,11 @@ func New(cfg config.Config, version, resumeID, initialPrompt string) (Model, err
 		status:          "ready",
 		sessionID:       session.NewID(),
 		modeIndex:       0,
+		mihaniMode:      cfg.MihaniMode,
 	}
 	m.agent.MaxIterations = cfg.MaxIterations
 	m.refreshSpend()
+	m.refreshBranch()
 	// Local endpoints (ollama & co.) must list what is actually installed;
 	// stored lists for them go stale, so re-pull on startup.
 	m.refreshLocalProviderModels()
@@ -403,16 +410,17 @@ func (m *Model) replayToolResult(msg map[string]any) {
 // appendToolDoneCard adds a settled tool card; a best-effort name is derived
 // from the stored content when the id does not carry one. todo_write results
 // are recognized by shape so resumed sessions rebuild the live list card.
-func (m *Model) appendToolDoneCard(id, name, output string) {
+func (m *Model) appendToolDoneCard(id, rawName, output string) {
+	name := tools.Normalize(rawName)
 	if name == "" {
 		name = id
 	}
-	if name != "todo_write" && strings.HasPrefix(output, "OK: ") &&
+	if name != tools.ToolTodoWrite && strings.HasPrefix(output, "OK: ") &&
 		(strings.Contains(output, "\n\u2713") || strings.Contains(output, "\n\u25cb") || strings.Contains(output, "\n\u25d0")) {
-		name = "todo_write"
+		name = tools.ToolTodoWrite
 	}
 	b := &block{kind: blockTool, label: name, status: statusDone, finalized: true}
-	if name == "todo_write" {
+	if name == tools.ToolTodoWrite {
 		b.kind = blockTodo
 		b.detail = firstLine(output)
 		if strings.HasPrefix(output, "OK: ") {
@@ -440,12 +448,12 @@ func (m *Model) replayAssistant(msg map[string]any) {
 			for _, call := range calls {
 				b := &block{
 					kind:      blockTool,
-					label:     call.Name,
+					label:     tools.Normalize(call.Name),
 					detail:    summarizeInput(call.Name, call.Input),
 					status:    statusDone,
 					finalized: true,
 				}
-				if call.Name == "todo_write" {
+				if b.label == tools.ToolTodoWrite {
 					b.kind = blockTodo
 				}
 				m.blocks = append(m.blocks, b)
@@ -465,7 +473,7 @@ func (m *Model) replayAnthropicAssistant(parts []map[string]any) {
 		case "text":
 			texts = append(texts, fmt.Sprint(part["text"]))
 		case "tool_use":
-			name := fmt.Sprint(part["name"])
+			name := tools.Normalize(fmt.Sprint(part["name"]))
 			input := map[string]any{}
 			if raw, ok := part["input"].(map[string]any); ok {
 				input = raw
@@ -477,7 +485,7 @@ func (m *Model) replayAnthropicAssistant(parts []map[string]any) {
 				status:    statusDone,
 				finalized: true,
 			}
-			if name == "todo_write" {
+			if name == tools.ToolTodoWrite {
 				b.kind = blockTodo
 			}
 			m.blocks = append(m.blocks, b)
@@ -497,7 +505,7 @@ func (m *Model) replayOpenAIToolCalls(msg map[string]any) {
 	}
 	for _, entry := range mapsOfToList(raw) {
 		fn, _ := entry["function"].(map[string]any)
-		name := fmt.Sprint(fn["name"])
+		name := tools.Normalize(fmt.Sprint(fn["name"]))
 		input := map[string]any{}
 		if args, ok := fn["arguments"].(string); ok {
 			_ = json.Unmarshal([]byte(args), &input)
@@ -509,7 +517,7 @@ func (m *Model) replayOpenAIToolCalls(msg map[string]any) {
 			status:    statusDone,
 			finalized: true,
 		}
-		if name == "todo_write" {
+		if name == tools.ToolTodoWrite {
 			b.kind = blockTodo
 		}
 		m.blocks = append(m.blocks, b)
@@ -930,8 +938,10 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.notify("mode: " + currentMode(m.modeIndex).name + " · " + m.cfg.ProviderLabel())
 		return m, nil, true
 	case key == "shift+tab":
-		m.modeIndex = (m.modeIndex - 1 + len(modes)) % len(modes)
-		m.notify("mode: " + currentMode(m.modeIndex).name + " · " + m.cfg.ProviderLabel())
+		// Mihani Mode: the no-interruptions toggle (Shift+Tab, like the
+		// auto-accept habit in other agents). Tools run without permission
+		// prompts; the header pill turns red while it is armed.
+		m.toggleMihaniMode()
 		return m, nil, true
 
 	case key == "enter":
@@ -1012,6 +1022,32 @@ func (m *Model) pasteBurstEnter() bool {
 	return false
 }
 
+// setMihaniMode flips the runtime state and keeps config + agent in sync.
+// Persistence and the toast live in toggleMihaniMode.
+func (m *Model) setMihaniMode(on bool) {
+	m.mihaniMode = on
+	m.cfg.MihaniMode = on
+	m.agent.Cfg = m.cfg
+}
+
+// toggleMihaniMode flips the no-interruptions mode, persists the choice, and
+// raises a toast explaining what just changed.
+func (m *Model) toggleMihaniMode() {
+	m.setMihaniMode(!m.mihaniMode)
+	_ = m.cfg.Save()
+	if m.mihaniMode {
+		m.notify("⚡ Mihani Mode ON — tools run without asking (Shift+Tab to turn off)")
+	} else {
+		m.notify("Mihani Mode off — dangerous tools ask first")
+	}
+}
+
+// mihaniModeActive reports whether tool calls should skip the permission
+// prompt this turn: Shift+Tab Mihani Mode or the legacy auto-confirm flag.
+func (m *Model) mihaniModeActive() bool {
+	return m.mihaniMode || m.cfg.AutoConfirm
+}
+
 func (m *Model) interrupt() {
 	if m.cancel != nil {
 		m.cancel()
@@ -1039,6 +1075,19 @@ func (m *Model) answerApproval(ok bool) {
 		m.status = "working"
 	} else {
 		m.status = "ready"
+	}
+}
+
+// refreshBranch updates the cached git branch shown in the status bar. It is
+// cheap enough to run once per turn; never on every render.
+func (m *Model) refreshBranch() {
+	if m.root == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if b, err := gitx.Branch(ctx, m.root); err == nil {
+		m.branch = b
 	}
 }
 
@@ -1496,12 +1545,12 @@ func (m *Model) startTurn(prompt string) tea.Cmd {
 	a.Cfg = cfg
 	a.Root = m.root
 	approve := func(name string, input map[string]any) bool {
-		if m.approveAll || cfg.AutoConfirm {
+		if m.mihaniModeActive() {
 			return true
 		}
 		if modeName == "plan" || modeName == "ask" {
 			switch name {
-			case "write_file", "edit_file", "delete_file", "bash":
+			case tools.ToolWriteFile, tools.ToolEditFile, tools.ToolDeleteFile, tools.ToolBash:
 				m.program.Send(eventMsg(agent.Event{
 					Kind: "activity",
 					Text: modeName + " mode blocked " + name,
@@ -1585,6 +1634,7 @@ func (m *Model) finishTurn(x resultMsg) tea.Cmd {
 	m.status = "ready"
 	m.keyKind = "" // next turn re-evaluates the credential variant
 	m.saveSession()
+	m.refreshBranch()
 	err := x.err
 	cancelled := err != nil && (errors.Is(err, context.Canceled) ||
 		strings.Contains(err.Error(), "context canceled") ||
@@ -1663,7 +1713,7 @@ func (m *Model) handle(e agent.Event) {
 		m.closeActiveAssistant()
 		m.closeActiveThinking()
 		idx := -1
-		if e.Tool == "todo_write" {
+		if tools.Normalize(e.Tool) == tools.ToolTodoWrite {
 			// Reuse the existing card so the list updates in place.
 			if i := m.lastTodoIndex(); i >= 0 {
 				b := m.blocks[i]
@@ -1682,7 +1732,7 @@ func (m *Model) handle(e agent.Event) {
 		} else {
 			m.blocks = append(m.blocks, &block{
 				kind:   blockTool,
-				label:  e.Tool,
+				label:  tools.Normalize(e.Tool),
 				detail: summarizeInput(e.Tool, e.Input),
 				status: statusRunning,
 			})

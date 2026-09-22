@@ -29,10 +29,10 @@ Rules:
 - Every call receives a reply in the form:
   <tool_result name="..." status="ok|error">output</tool_result>
 - Never invent results. Never fabricate a tool_result yourself.
-- read_file returns one window at a time plus the file's total line count.
+- Mihani_Read_File returns one window at a time plus the file's total line count.
   To read a LARGE file entirely, call it repeatedly with increasing offset
   until you pass the reported total. To read only half, start at
-  offset = total/2. Never fall back to bash just to view a file.
+  offset = total/2. Never fall back to Mihani_Bash just to view a file.
 - When the task is complete (or no tool is needed), answer in plain prose and
   include NO tool_call block.`
 
@@ -134,15 +134,20 @@ var botchedAliasTagRe = regexp.MustCompile(`<\w*_tool_call>`)
 
 // looksLikeBotchedToolCall reports whether a reply that parsed to ZERO valid
 // tool calls still looks like an attempted (malformed) tool call: a closing tag
-// for a known tool (</ask_user>, </write_file>, ...) or an aliased *_tool_call
-// tag. Such a reply would otherwise silently end the turn with a half-call shown
-// to the user.
+// for a known tool (canonical Mihani_* or a legacy pre-rename name) or an
+// aliased *_tool_call tag. Such a reply would otherwise silently end the turn
+// with a half-call shown to the user.
 func looksLikeBotchedToolCall(text string) bool {
 	if botchedAliasTagRe.MatchString(text) {
 		return true
 	}
 	for _, name := range knownToolNames() {
 		if strings.Contains(text, "</"+name+">") {
+			return true
+		}
+	}
+	for legacy := range tools.LegacyNames() {
+		if strings.Contains(text, "</"+legacy+">") {
 			return true
 		}
 	}
@@ -264,7 +269,7 @@ func (a *Agent) sendPromptBased(ctx context.Context, p config.Provider, prompt, 
 				parseFailures++
 				hint := "Reply with exactly one <tool_call>{\"name\": ..., \"arguments\": {...}}</tool_call> block."
 				if strings.Contains(content, "node -e") || strings.Contains(content, "python -c") {
-					hint = "Inline scripts with nested quotes break JSON. Instead: use write_file to save a temp .js/.py file, then run it with bash."
+					hint = "Inline scripts with nested quotes break JSON. Instead: use Mihani_Write_File to save a temp .js/.py file, then run it with Mihani_Bash."
 				} else if strings.Count(content, "\\\"") > 0 {
 					hint = "Escape quotes carefully or prefer single quotes inside command strings; simpler commands parse more reliably."
 				}

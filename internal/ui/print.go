@@ -61,7 +61,10 @@ func RunPrint(cfg config.Config, prompt string) error {
 		}
 		lastErr = a.Send(ctx, prompt, "build",
 			func(name string, _ map[string]any) bool {
-				if cfg.AutoConfirm || cfg.Permissions["shell"] == "allow" && name == "bash" {
+				if cfg.MihaniMode || cfg.AutoConfirm {
+					return true
+				}
+				if cfg.Permissions["shell"] == "allow" && tools.Normalize(name) == tools.ToolBash {
 					return true
 				}
 				return !tools.Lookup(name).Dangerous

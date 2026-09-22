@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/SSNamahsos/Mihani-Code/internal/config"
+	"github.com/SSNamahsos/Mihani-Code/internal/tools"
 )
 
 func TestExtractToolCallsTagged(t *testing.T) {
@@ -161,7 +162,7 @@ func TestPromptBasedToolsEndToEnd(t *testing.T) {
 func TestPromptBasedSystemPromptListsTools(t *testing.T) {
 	a := &Agent{}
 	catalog := a.toolCatalog()
-	for _, want := range []string{"read_file", "write_file", "edit_file", "bash"} {
+	for _, want := range []string{tools.ToolReadFile, tools.ToolWriteFile, tools.ToolEditFile, tools.ToolBash} {
 		if !strings.Contains(catalog, want) {
 			t.Fatalf("catalog missing %s:\n%s", want, catalog)
 		}

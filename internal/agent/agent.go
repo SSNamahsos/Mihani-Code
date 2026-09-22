@@ -42,7 +42,7 @@ type Event struct {
 	Iteration  int
 	Done       bool
 	Approval   chan bool
-	Answer     chan string // ask_user: UI delivers the user's answer over this channel
+	Answer     chan string // Mihani_Ask_User: UI delivers the user's answer over this channel
 }
 
 type Agent struct {
@@ -129,7 +129,7 @@ func (a *Agent) sendOpenAI(ctx context.Context, p config.Provider, prompt, mode 
 			if errors.Is(err, errTruncated) && a.lastFinish == "length" && a.lengthNudges < 3 {
 				a.lengthNudges++
 				a.history = append(a.history, map[string]any{"role": "user", "content": "Your previous reply was cut off at the maximum output token limit. " +
-					"Continue the task from where it stopped. Split large file writes into several smaller write_file/edit_file calls so one reply never exceeds the limit."})
+					"Continue the task from where it stopped. Split large file writes into several smaller Mihani_Write_File/Mihani_Edit_File calls so one reply never exceeds the limit."})
 				emit(Event{Kind: "activity", Text: "continuing (previous reply hit the token limit)"})
 				continue
 			}
@@ -139,7 +139,7 @@ func (a *Agent) sendOpenAI(ctx context.Context, p config.Provider, prompt, mode 
 		a.history = append(a.history, assistant)
 		if len(calls) == 0 {
 			// Defense in depth #2 (build mode): some models still dump file
-			// content as plain text instead of calling write_file — the exact
+			// content as plain text instead of calling Mihani_Write_File — the exact
 			// "here, save this as index.html" failure mode. A reply cut off
 			// at the output token limit is treated the same: it almost always
 			// means the model is writing a whole file in one giant reply.
@@ -153,7 +153,7 @@ func (a *Agent) sendOpenAI(ctx context.Context, p config.Provider, prompt, mode 
 					reason = "it was cut off at the maximum output token limit"
 				}
 				a.history = append(a.history, map[string]any{"role": "user", "content": "Your previous reply " + reason + ". Do not paste file content in chat. " +
-					"Use the write_file / edit_file tools to create or modify files instead, " +
+					"Use the Mihani_Write_File / Mihani_Edit_File tools to create or modify files instead, " +
 					"one file per call, in smaller chunks for large files. Continue the task."})
 				emit(Event{Kind: "activity", Text: "nudging: use file tools instead of pasting code"})
 				continue
@@ -560,9 +560,12 @@ func (a *Agent) anthropicRequest(ctx context.Context, p config.Provider, mode st
 
 const historyToolLimit = 6000
 
-func (a *Agent) runTool(ctx context.Context, name string, input map[string]any, id string, approve func(string, map[string]any) bool, emit func(Event)) (string, error) {
+func (a *Agent) runTool(ctx context.Context, rawName string, input map[string]any, id string, approve func(string, map[string]any) bool, emit func(Event)) (string, error) {
+	// Normalize legacy/case-variant names first so events, previews, and the
+	// approval modal all show (and gate on) the canonical Mihani_* name.
+	name := tools.Normalize(rawName)
 	emit(Event{Kind: "tool_start", Tool: name, Input: input, ToolCallID: id})
-	if name == "ask_user" {
+	if name == tools.ToolAskUser {
 		return a.askUser(ctx, input, emit)
 	}
 	definition := tools.Lookup(name)
@@ -607,7 +610,7 @@ func (a *Agent) runTool(ctx context.Context, name string, input map[string]any, 
 func (a *Agent) askUser(ctx context.Context, input map[string]any, emit func(Event)) (string, error) {
 	question, _ := input["question"].(string)
 	if strings.TrimSpace(question) == "" {
-		return "ERROR: ask_user requires a non-empty question", nil
+		return "ERROR: Mihani_Ask_User requires a non-empty question", nil
 	}
 	answer := make(chan string, 1)
 	emit(Event{Kind: "ask", Text: question, Input: input, Answer: answer})
@@ -1073,12 +1076,12 @@ func SystemPrompt(mode, root string) string {
 	return b.String()
 }
 
-const basePrompt = "You are Mihani Code, a concise terminal coding agent. Inspect before editing. Explain changes briefly. Never claim a change was made unless a tool succeeded. Keep output practical. Prefer edit_file over rewriting whole files. NEVER paste full file content in your reply — create or modify files only with the write_file/edit_file tools (several smaller calls for large files); chat text is for explanations and summaries. Use markdown formatting in responses. For multi-step work (3+ steps), create a visible task list with the todo_write tool up front and update item statuses (pending, in_progress, done) as you progress. When a decision genuinely needs the user, use the ask_user tool with concrete options instead of guessing. You have exactly the tools listed in the tool section. Be strictly honest: never claim you read, wrote, or ran something unless the matching tool actually returned a result this session, and never invent a tool_result. If a tool you were told about is not actually present in your tool list for this session, say so plainly and suggest the best alternative instead of pretending to have used it; if a tool call is rejected, correct the arguments against the listed schema and continue rather than giving up."
+const basePrompt = "You are Mihani Code, a concise terminal coding agent. Inspect before editing. Explain changes briefly. Never claim a change was made unless a tool succeeded. Keep output practical. Prefer Mihani_Edit_File over rewriting whole files. NEVER paste full file content in your reply — create or modify files only with the Mihani_Write_File/Mihani_Edit_File tools (several smaller calls for large files); chat text is for explanations and summaries. Use markdown formatting in responses. For multi-step work (3+ steps), create a visible task list with the Mihani_Todo_Write tool up front and update item statuses (pending, in_progress, done) as you progress. When a decision genuinely needs the user, use the Mihani_Ask_User tool with concrete options instead of guessing. You have exactly the tools listed in the tool section. Be strictly honest: never claim you read, wrote, or ran something unless the matching tool actually returned a result this session, and never invent a tool_result. If a tool you were told about is not actually present in your tool list for this session, say so plainly and suggest the best alternative instead of pretending to have used it; if a tool call is rejected, correct the arguments against the listed schema and continue rather than giving up."
 
 func workspaceContext(root string) string {
 	var b strings.Builder
 	if found := skills.Discover(root); len(found) > 0 {
-		b.WriteString("\n\n# Skills\nThe following skills are installed. When a task matches a skill's description, use the read_file tool to open its SKILL.md path and follow the instructions inside it before proceeding; do not guess at what a skill does.")
+		b.WriteString("\n\n# Skills\nThe following skills are installed. When a task matches a skill's description, use the Mihani_Read_File tool to open its SKILL.md path and follow the instructions inside it before proceeding; do not guess at what a skill does.")
 		for _, skill := range found {
 			b.WriteString("\n- " + skill.Name + ": " + skill.Description + "  (file: " + skill.Path + ")")
 		}
@@ -1138,14 +1141,14 @@ func (a *Agent) anthropicTools() []map[string]any {
 
 // hidesTool reports whether a tool is hidden from the model in the current
 // mode. Read-only modes (ask, plan) hide the file/shell tools so the model
-// cannot even be offered write_file/edit_file/delete_file/bash; build and
+// cannot even be offered Mihani_Write_File/Mihani_Edit_File/Mihani_Delete_File/Mihani_Bash; build and
 // research keep the full tool set (research may write deliverables).
 func (a *Agent) hidesTool(name string) bool {
 	if a.mode != "ask" && a.mode != "plan" {
 		return false
 	}
 	switch name {
-	case "write_file", "edit_file", "delete_file", "bash":
+	case tools.ToolWriteFile, tools.ToolEditFile, tools.ToolDeleteFile, tools.ToolBash:
 		return true
 	}
 	return false

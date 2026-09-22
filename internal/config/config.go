@@ -68,12 +68,16 @@ type Config struct {
 	BudgetUSD       float64                  `json:"budget_usd,omitempty"`
 	Pricing         map[string]pricing.Entry `json:"pricing,omitempty"`
 	AutoConfirm     bool                     `json:"auto_confirm"`
-	UseMouse        *bool                    `json:"use_mouse,omitempty"` // nil = off: the terminal handles text selection natively (always works); true = capture the mouse for click menus + in-app drag select
-	PlainUI         bool                     `json:"plain_ui,omitempty"` // true = ASCII borders + spinner (for terminals whose font lacks box-drawing/braille glyphs)
-	MaxIterations   int                      `json:"max_iterations,omitempty"`
-	Workspace       string                   `json:"workspace,omitempty"`
-	Providers       map[string]Provider      `json:"providers"`
-	Permissions     map[string]string        `json:"permissions,omitempty"`
+	// MihaniMode is the no-interruptions toggle (Shift+Tab / /mihani): when
+	// on, dangerous tools run without the permission prompt while a mode
+	// allows them. Persisted so the choice survives restarts.
+	MihaniMode    bool                `json:"mihani_mode,omitempty"`
+	UseMouse      *bool               `json:"use_mouse,omitempty"` // nil = off: the terminal handles text selection natively (always works); true = capture the mouse for click menus + in-app drag select
+	PlainUI       bool                `json:"plain_ui,omitempty"`  // true = ASCII borders + spinner (for terminals whose font lacks box-drawing/braille glyphs)
+	MaxIterations int                 `json:"max_iterations,omitempty"`
+	Workspace     string              `json:"workspace,omitempty"`
+	Providers     map[string]Provider `json:"providers"`
+	Permissions   map[string]string   `json:"permissions,omitempty"`
 }
 
 // Built-in provider ids. These are internal keys only: every user-facing

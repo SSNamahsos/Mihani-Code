@@ -6,9 +6,11 @@ Mihani Code is a native Go terminal AI coding agent. It provides a focused works
 
 - Bubble Tea terminal UI with a block-based transcript, markdown rendering (glamour), and syntax-tinted diff previews
 - Streaming OpenAI-compatible responses with parallel tool-call reassembly
+- **Mihani-branded tools**: `Mihani_Read_File`, `Mihani_Write_File`, `Mihani_Edit_File`, `Mihani_Delete_File`, `Mihani_List_Dir`, `Mihani_Search_Files`, `Mihani_Grep` (regex matches as `path:line:`), `Mihani_Glob`, `Mihani_Bash`, `Mihani_Web_Search`, `Mihani_Web_Fetch`, `Mihani_Image_Reader`, `Mihani_Ask_User`, `Mihani_Todo_Write`
+- **Mihani Mode (Shift+Tab)**: the no-interruptions toggle — tools run without permission prompts while the header shows a red ⚡ MIHANI pill
 - Multi-turn tool execution loops: read, write, edit, delete (files or whole directories), search files plus shell commands
 - **Interactive questions**: the model can pause mid-task and ask you a question - options appear as a menu you pick from, or you type a custom answer; it may ask several in a row
-- **Live todo list**: the agent maintains a visible task card (`todo_write`) that updates in place with ✓/◐/○ per item as work progresses
+- **Live todo list**: the agent maintains a visible task card (`Mihani_Todo_Write`) that updates in place with ✓/◐/○ per item as work progresses
 - Two built-in endpoints with curated default models; `/connect` discovers models from any OpenAI-compatible endpoint
 - **Live cost meter**: real input/output token accounting, per-model $ pricing, rolling 24h spend per provider
 - **Daily budget enforcement**: turns are refused once a provider reaches its 24h cap (default $10)
@@ -98,7 +100,8 @@ mihani --version
 | `enter` | send prompt (or insert the highlighted palette command) |
 | `ctrl+j` / `alt+enter` | newline inside the composer (long lines wrap upward) |
 | `/` ... | type to filter the command palette |
-| `tab` / `shift+tab` | cycle modes (navigate the palette when it is open) |
+| `tab` | cycle modes (navigate the palette when it is open) |
+| `shift+tab` | toggle **Mihani Mode** — tools run without asking (also `/mihani`) |
 | `↑` / `↓` / `pgup` / `pgdn` | scroll the transcript (arrows stay in the composer while it is multiline) |
 | *select with mouse* | select text with your terminal's own drag selection (native, always works - it auto-copies in Windows Terminal) |
 | `/mouse` + drag | in-app selection: click menus, drag-select with auto-copy, and selections that **extend across scrolling** (wheel or drag-to-edge grows them) |
@@ -120,6 +123,7 @@ While a turn is running you can keep typing: additional prompts are queued and s
 - `/new` start a fresh session
 - `/resume` (aliases `/seasons`, `/sessions`) pick and restore a previous conversation in this folder
 - `/mode [build|plan|research|ask]` show or set the mode
+- `/mihani` toggle Mihani Mode — tools run without asking (Shift+Tab)
 - `/providers`, `/models`, `/connect` provider management
 - `/git status`, `/git diff` repository inspection
 - `/status`, `/session` workspace/session details
@@ -140,7 +144,11 @@ Modes shape what the agent is allowed to do before tools ever run:
 
 Modes are independent of the provider: **the mode controls what the agent is allowed to do** (whether it may mutate files), and **you pick the provider/model separately with `/providers` / `/models` in any mode**. Both built-in endpoints run Mihani's full file/shell tool set — build mode works on Mihani Cloud and Mihani Pro alike.
 
-Plan, Research, and Ask refuse mutating tools (`write_file`, `edit_file`, `delete_file`, `bash`) without asking the provider to retry them.
+Plan, Research, and Ask refuse mutating tools (`Mihani_Write_File`, `Mihani_Edit_File`, `Mihani_Delete_File`, `Mihani_Bash`) without asking the provider to retry them.
+
+### Mihani Mode
+
+Press **Shift+Tab** (or run `/mihani`) to arm Mihani Mode: dangerous tools run **without the permission modal** — approve-once prompts disappear, writes/deletes/shell just execute. The header pill becomes a red **⚡ MIHANI** badge and the composer border turns red while armed; the state is saved to `config.json` so it survives restarts. Modes still apply (plan/ask stay read-only — the model isn't even offered the write tools), and the tools a turn runs are unchanged otherwise. Shift+Tab again disarms it.
 
 ## Providers and default models
 
@@ -155,7 +163,7 @@ Switch with `/providers` and `/models`; `/connect` adds any other OpenAI-compati
 
 ### Endpoints without native tool calling
 
-Some gateways strip OpenAI's `tools` parameter, so models there never see file/shell tools. For those, set `"native_tools": false` on the provider (the second built-in endpoint ships this way) and Mihani drives tools through a text protocol instead: the tool catalog joins the system prompt, the model replies with `<tool_call>{...}</tool_call>` blocks, Mihani executes them locally and feeds back `<tool_result>` blocks until the task completes. This works with any chat-completions endpoint - tools become a property of Mihani, not of the API. Providers added via `/connect` that point at a known gateway are auto-detected and default to the text protocol, and `read_file` supports `offset`/`limit` line-paging so large files never hit a truncation wall.
+Some gateways strip OpenAI's `tools` parameter, so models there never see file/shell tools. For those, set `"native_tools": false` on the provider (the second built-in endpoint ships this way) and Mihani drives tools through a text protocol instead: the tool catalog joins the system prompt, the model replies with `<tool_call>{...}</tool_call>` blocks, Mihani executes them locally and feeds back `<tool_result>` blocks until the task completes. This works with any chat-completions endpoint - tools become a property of Mihani, not of the API. Providers added via `/connect` that point at a known gateway are auto-detected and default to the text protocol, and `Mihani_Read_File` supports `offset`/`limit` line-paging so large files never hit a truncation wall.
 
 Reasoning models are supported throughout: streamed `reasoning_content` (GLM/DeepSeek style) and Anthropic `thinking` deltas render in a dedicated dimmed thinking block above the answer.
 

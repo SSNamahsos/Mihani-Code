@@ -2,6 +2,22 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.3.0
+
+### Added
+- **Mihani Mode — the no-interruptions toggle (Shift+Tab).** Press Shift+Tab (or run `/mihani`) and Mihani stops asking before dangerous tools: writes, edits, deletions, and shell commands just run. While it is armed the header pill turns into a red **⚡ MIHANI** badge and the composer border glows red, so you always know it is on. The choice persists in `config.json`; modes still gate what the agent may do (plan/ask stay read-only) — Mihani Mode removes the per-tool permission prompts.
+- **`Mihani_Grep`** — regex search that returns the actual matches as `path:line: text` (optional case-insensitive matching), so the agent can jump straight to the right spot instead of only learning which files match.
+- **`Mihani_Image_Reader`** — inspect an image file's format (png/jpeg/gif), pixel dimensions, and byte size right from the chat; handy for screenshot and asset work.
+- **Git branch in the status bar and home page** — the active branch is detected at launch and refreshed after every turn.
+
+### Changed
+- **Every tool is now Mihani-branded: `Mihani_Read_File`, `Mihani_Write_File`, `Mihani_Edit_File`, `Mihani_Delete_File`, `Mihani_List_Dir`, `Mihani_Search_Files`, `Mihani_Glob`, `Mihani_Bash`, `Mihani_Web_Search`, `Mihani_Web_Fetch`, `Mihani_Ask_User`, `Mihani_Todo_Write`.** The system prompt, tool catalog, previews, and nudges all use the new names. Old spellings are normalized automatically — pre-v0.3.0 sessions replay with the new cards, and a model that still emits a legacy name gets the same tool, so nothing breaks.
+- **UI polish** — the home page shows the Mihani Mode state and the git branch; Shift+Tab is documented in the quick keys and the idle status bar; `/help` reflects the new binding; `/settings` lists Mihani Mode as its first toggle.
+
+### Notes
+- Tab still cycles modes (build → plan → research → ask); Shift+Tab now toggles Mihani Mode instead of cycling backwards.
+- The `/settings` Auto confirm toggle keeps working and counts as part of Mihani Mode's no-prompt behavior.
+
 ## v0.2.31
 
 ### Fixed

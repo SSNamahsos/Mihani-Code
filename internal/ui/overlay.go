@@ -205,6 +205,10 @@ func (m *Model) selectOverlayItem() {
 		if m.overlayIndex < len(m.overlayItems) {
 			label := m.overlayItems[m.overlayIndex].label
 			switch {
+			case label == "Mihani Mode (no prompts)":
+				m.toggleMihaniMode()
+				m.openOverlay("Settings", m.settingsItems())
+				return
 			case label == "Auto confirm":
 				m.cfg.AutoConfirm = !m.cfg.AutoConfirm
 				_ = m.cfg.Save()
@@ -297,7 +301,7 @@ func (m *Model) command(s string) tea.Cmd {
 		for _, item := range commands {
 			rows = append(rows, fmt.Sprintf("%-11s %s", item.name, item.description))
 		}
-			keys := "enter send · ctrl+j newline · tab/shift+tab cycle modes · esc (twice) stop request\n" +
+			keys := "enter send · ctrl+j newline · tab cycle modes · shift+tab Mihani Mode (no prompts) · esc (twice) stop request\n" +
 				"ctrl+r cycle reasoning effort (off/low/medium/high) · /effort menu\n" +
 				"pasting a multiline block keeps it in the composer as one message (enter sends it whole)\n" +
 				"↑↓/pgup/pgdn scroll · drag to select text, release copies it\n" +
@@ -383,6 +387,9 @@ func (m *Model) command(s string) tea.Cmd {
 			})
 		}
 		m.openOverlay("Modes", items)
+
+	case "/mihani":
+		m.toggleMihaniMode()
 
 	case "/providers":
 		items := make([]overlayItem, 0, len(m.cfg.Providers))
@@ -547,7 +554,7 @@ func (m *Model) command(s string) tea.Cmd {
 			"Inspect the directory layout, README, manifest/build files, and tests first. The file should contain: " +
 			"(1) a short overview of what the project is, (2) build / test / lint commands that actually work here, " +
 			"(3) the key directories and their purpose, (4) code style and conventions worth following. " +
-			"Keep it under 60 lines. If .mihani.md already exists, use edit_file to improve it instead of rewriting it from scratch.")
+			"Keep it under 60 lines. If .mihani.md already exists, use Mihani_Edit_File to improve it instead of rewriting it from scratch.")
 
 	case "/export":
 		m.openExportMenu()
@@ -708,6 +715,10 @@ func (m *Model) settingsItems() []overlayItem {
 	if m.cfg.AutoConfirm {
 		auto = "on - tools run without asking"
 	}
+	mihani := "off - Shift+Tab or /mihani to arm"
+	if m.mihaniMode {
+		mihani = "ON - tools run without asking · Shift+Tab disarms"
+	}
 	reset := usage.NextReset(m.cfg.CurrentProvider)
 	resetLabel := "-"
 	if !reset.IsZero() {
@@ -725,6 +736,7 @@ func (m *Model) settingsItems() []overlayItem {
 		plain = "on - ASCII borders + spinner (fonts missing those glyphs)"
 	}
 	items := []overlayItem{
+		{label: "Mihani Mode (no prompts)", detail: mihani + "  (enter toggles)"},
 		{label: "Auto confirm", detail: auto + "  (enter toggles)"},
 		{label: "Plain UI (ASCII)", detail: plain + "  (enter toggles)"},
 		{label: "Daily budget", detail: fmt.Sprintf("$%.2f on Mihani built-in endpoints only", m.cfg.Budget())},

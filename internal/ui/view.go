@@ -139,12 +139,19 @@ func (m *Model) headerRow() string {
 		modelLabel += " · effort:" + effort
 	}
 	model := lipgloss.NewStyle().Foreground(colDim).Render(modelLabel)
+	// Mihani Mode gets its own red pill so the armed state is unmissable;
+	// otherwise the header shows the current mode's color.
 	mode := currentMode(m.modeIndex)
-	pill := lipgloss.NewStyle().Bold(true).
+	pillStyle := lipgloss.NewStyle().Bold(true).
 		Background(mode.color).
 		Foreground(lipgloss.Color("#101216")).
-		Padding(0, 1).
-		Render(strings.ToUpper(mode.name))
+		Padding(0, 1)
+	pillText := strings.ToUpper(mode.name)
+	if m.mihaniMode {
+		pillStyle = pillStyle.Background(colRed).Foreground(colBright)
+		pillText = "⚡ MIHANI"
+	}
+	pill := pillStyle.Render(pillText)
 	right := pill + " " + model
 	left := logo + version
 	gap := maxInt(1, m.width-lipgloss.Width(left)-lipgloss.Width(right))
@@ -153,9 +160,13 @@ func (m *Model) headerRow() string {
 
 func (m *Model) composerBox() string {
 	mode := currentMode(m.modeIndex)
+	border := mode.color
+	if m.mihaniMode {
+		border = colRed // armed: the composer glows red like the header pill
+	}
 	return lipgloss.NewStyle().
 		Border(boxBorder()).
-		BorderForeground(mode.color).
+		BorderForeground(border).
 		Padding(0, 1).
 		Width(maxInt(10, m.width-2)).
 		Render(m.input.View())
@@ -190,7 +201,7 @@ func (m *Model) statusRow() string {
 		left = lipgloss.NewStyle().Foreground(colCyan).Render("… message queued")
 	default:
 		left = lipgloss.NewStyle().Foreground(colFaint).
-			Render("/ seasons · / commands · tab mode · ↑↓/pgup scroll · esc stop")
+			Render("/ seasons · / commands · tab mode · shift+tab mihani · ↑↓/pgup scroll · esc stop")
 	}
 	window := m.cfg.ContextWindow
 	if window <= 0 {
@@ -198,8 +209,12 @@ func (m *Model) statusRow() string {
 	}
 	pct := float64(m.tokens) / float64(window) * 100
 	ctxBar := contextBar(pct)
+	loc := shortPath(m.root)
+	if m.branch != "" {
+		loc += " (" + m.branch + ")"
+	}
 	right := fmt.Sprintf("%s · %s · %sk tokens (%.0f%%) · %s",
-		shortPath(m.root), ctxBar, formatK(m.tokens), pct, m.status)
+		loc, ctxBar, formatK(m.tokens), pct, m.status)
 	spendPart := m.spendLabel()
 	if spendPart != "" {
 		right = spendPart + " · " + right
@@ -338,6 +353,16 @@ func (m *Model) welcome() string {
 		lipgloss.NewStyle().Foreground(colFaint).Render("provider  ") + m.cfg.ProviderLabel() + " · " + m.cfg.CurrentModel,
 		lipgloss.NewStyle().Foreground(mode.color).Render("mode      ") + mode.name + " — " + mode.description,
 	}
+	mihaniState := "off — Shift+Tab arms it (tools run without asking)"
+	if m.mihaniMode {
+		mihaniState = "ON — tools run without asking (Shift+Tab disarms)"
+	}
+	infoRows = append(infoRows,
+		lipgloss.NewStyle().Foreground(colRed).Render("mihani    ")+mihaniState)
+	if m.branch != "" {
+		infoRows = append(infoRows,
+			lipgloss.NewStyle().Foreground(colFaint).Render("git       ")+m.branch)
+	}
 
 	// Count past seasons in this folder so /seasons feels discoverable.
 	seasonHint := "no previous seasons here yet"
@@ -359,6 +384,7 @@ func (m *Model) welcome() string {
 		lipgloss.NewStyle().Foreground(colText).Render("/ seasons") + lipgloss.NewStyle().Foreground(colFaint).Render("   open a past conversation from this folder"),
 		lipgloss.NewStyle().Foreground(colText).Render("/ commands") + lipgloss.NewStyle().Foreground(colFaint).Render("   browse everything mihani can do"),
 		lipgloss.NewStyle().Foreground(colText).Render("tab modes") + lipgloss.NewStyle().Foreground(colFaint).Render("     build, plan, research, or ask"),
+		lipgloss.NewStyle().Foreground(colRed).Render("shift+tab") + lipgloss.NewStyle().Foreground(colFaint).Render("     Mihani Mode — tools run without asking"),
 		lipgloss.NewStyle().Foreground(colText).Render("[ ] on a message") + lipgloss.NewStyle().Foreground(colFaint).Render("  copy / fork / revert actions"),
 		lipgloss.NewStyle().Foreground(colText).Render("select text") + lipgloss.NewStyle().Foreground(colFaint).Render("    drag with your terminal's own selection"),
 	}

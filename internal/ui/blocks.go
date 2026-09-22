@@ -365,7 +365,8 @@ func todoContentFromInput(input map[string]any) (string, bool) {
 }
 
 // summarizeInput builds a short human-readable description of a tool call.
-func summarizeInput(name string, input map[string]any) string {
+func summarizeInput(rawName string, input map[string]any) string {
+	name := tools.Normalize(rawName)
 	get := func(keys ...string) string {
 		for _, k := range keys {
 			if v, ok := input[k]; ok {
@@ -381,22 +382,24 @@ func summarizeInput(name string, input map[string]any) string {
 		return ""
 	}
 	switch name {
-	case "bash":
+	case tools.ToolBash:
 		return get("command")
-	case "ask_user":
+	case tools.ToolAskUser:
 		return get("question")
-	case "todo_write":
+	case tools.ToolTodoWrite:
 		return todoSummaryFromInput(input)
-	case "read_file", "write_file", "edit_file", "delete_file":
+	case tools.ToolReadFile, tools.ToolWriteFile, tools.ToolEditFile, tools.ToolDeleteFile:
 		return get("path")
-	case "search_files":
+	case tools.ToolSearchFiles, tools.ToolGrep:
 		if p := get("pattern"); p != "" {
 			if dir := get("path"); dir != "" && dir != "." {
 				return fmt.Sprintf("%q in %s", p, dir)
 			}
 			return fmt.Sprintf("%q", p)
 		}
-	case "list_dir":
+	case tools.ToolListDir:
+		return get("path")
+	case tools.ToolImageReader:
 		return get("path")
 	}
 	if rest := get("name", "path", "command", "query"); rest != "" {
