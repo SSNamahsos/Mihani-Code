@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/truncate"
 
+	"github.com/SSNamahsos/Mihani-Code/internal/rtl"
 	"github.com/SSNamahsos/Mihani-Code/internal/tools"
 )
 
@@ -63,31 +64,51 @@ func indentBlock(s string, pad int) string {
 	return strings.Join(lines, "\n")
 }
 
+// displayLines applies Persian/Arabic shaping + bidi reordering to every
+// display line when RTL support is on (default; toggle with /rtl). It runs on
+// final styled output, so ANSI styling survives and non-RTL lines are cheap
+// no-ops.
+func displayLines(s string) string {
+	if !rtlDisplay {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = rtl.DisplayANSI(l)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // render returns the block's display output, re-rendering only when stale.
 func (b *block) render(w int, spinnerChar string) string {
 	if b.width == w && b.width != 0 {
 		return b.rendered
 	}
-	switch b.kind {
-	case blockUser:
-		b.rendered = b.renderUser(w)
-	case blockAssistant:
-		b.rendered = b.renderAssistant(w, spinnerChar)
-	case blockThinking:
-		b.rendered = b.renderThinking(w, spinnerChar)
-	case blockTool:
-		b.rendered = b.renderTool(w, spinnerChar)
-	case blockTodo:
-		b.rendered = b.renderTodo(w, spinnerChar)
-	case blockInfo:
-		b.rendered = lipgloss.NewStyle().Foreground(colDim).
-			Render(indentBlock(wrap(b.content, w-2), 2))
-	case blockError:
-		b.rendered = lipgloss.NewStyle().Foreground(colRed).Render(
-			indentBlock(wrap("✗ "+b.content, w-2), 2))
-	}
+	b.rendered = displayLines(b.renderInner(w, spinnerChar))
 	b.width = w
 	return b.rendered
+}
+
+func (b *block) renderInner(w int, spinnerChar string) string {
+	switch b.kind {
+	case blockUser:
+		return b.renderUser(w)
+	case blockAssistant:
+		return b.renderAssistant(w, spinnerChar)
+	case blockThinking:
+		return b.renderThinking(w, spinnerChar)
+	case blockTool:
+		return b.renderTool(w, spinnerChar)
+	case blockTodo:
+		return b.renderTodo(w, spinnerChar)
+	case blockInfo:
+		return lipgloss.NewStyle().Foreground(colDim).
+			Render(indentBlock(wrap(b.content, w-2), 2))
+	case blockError:
+		return lipgloss.NewStyle().Foreground(colRed).Render(
+			indentBlock(wrap("✗ "+b.content, w-2), 2))
+	}
+	return ""
 }
 
 func firstLine(s string) string {

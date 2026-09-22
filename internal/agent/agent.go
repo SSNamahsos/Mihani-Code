@@ -624,8 +624,26 @@ func (a *Agent) askUser(ctx context.Context, input map[string]any, emit func(Eve
 
 // compactHistory trims the oldest stored tool outputs once the raw history
 // grows past its budget so long sessions do not overflow provider context.
-func (a *Agent) compactHistory() {
-	const budget = 240_000 // ~60k tokens of raw characters
+func (a *Agent) compactHistory() { a.compactHistoryAt(240_000) }
+
+// CompactNow force-trims stored tool output regardless of the normal budget
+// (/compact) and returns a human-readable summary of what was freed.
+func (a *Agent) CompactNow() string {
+	before := 0
+	for _, msg := range a.history {
+		before += contentSize(msg["content"])
+	}
+	a.compactHistoryAt(0)
+	after := 0
+	for _, msg := range a.history {
+		after += contentSize(msg["content"])
+	}
+	return fmt.Sprintf("history compacted: %d -> %d chars of context (%d freed)", before, after, before-after)
+}
+
+// compactHistoryAt trims the oldest stored tool outputs once the raw history
+// grows past budget; budget 0 forces the trim.
+func (a *Agent) compactHistoryAt(budget int) {
 	total := 0
 	for _, m := range a.history {
 		total += contentSize(m["content"])

@@ -2,6 +2,21 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.4.0
+
+### Added
+- **Persian / RTL support — type and read فارسی correctly.** Terminals without native bidi show Arabic-script text disconnected and reversed. Mihani now shapes letters into their joined forms and reorders right-to-left runs for display everywhere: assistant replies, your prompts, tool cards, questions, menus, and the composer — typed Persian appears shaped live while the text sent to the model stays logical. Toggle with `/rtl` or `"rtl_display": false` in config.json if your terminal implements bidi natively.
+- **`!command` shell passthrough** — type `! git status` to run a command in the workspace directly; the output lands in the transcript.
+- **`#note` project memory** — `# always run go vet first` appends the line to `.mihani.md`; future sessions read it automatically.
+- **`@file` mentions** — `explain @main.go` inlines the file's contents into the prompt for the model (16 KB per file cap, secrets redacted, unknown paths left untouched).
+- **`/compact`** — force-trim stored tool output now instead of waiting for automatic context compaction; reports how much context was freed.
+- **`/todos`** — show the current todo list on demand.
+- **Prompt history** — `ctrl+up` / `ctrl+down` walk previously submitted prompts; your in-progress draft is preserved and restored.
+
+### Changed
+- **The composer is a custom editor now**: identical behavior for Latin text plus RTL-aware rendering (cursor mapped into visual space), soft-wrap, `ctrl+w` word delete, `ctrl+u` / `ctrl+k` line kill, and `home` / `end`.
+- A Persian example joined the home page's TRY list, and `/help` documents the new shortcuts.
+
 ## v0.3.0
 
 ### Added

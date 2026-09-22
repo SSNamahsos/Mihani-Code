@@ -158,7 +158,7 @@ func (m *Model) askView() string {
 		BorderForeground(colCyan).
 		Padding(1, 2).
 		Width(boxWidth).
-		Render(body.String())
+		Render(displayLines(body.String()))
 	return lipgloss.Place(m.width, maxInt(1, m.height), lipgloss.Center, lipgloss.Center, box)
 }
 

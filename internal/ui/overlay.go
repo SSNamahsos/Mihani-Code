@@ -285,7 +285,7 @@ func (m *Model) overlayView() string {
 		BorderForeground(colBorder).
 		Padding(1, 2).
 		Width(boxWidth).
-		Render(body)
+		Render(displayLines(body))
 	return lipgloss.Place(m.width, maxInt(1, m.height), lipgloss.Center, lipgloss.Center, box)
 }
 
@@ -302,7 +302,8 @@ func (m *Model) command(s string) tea.Cmd {
 			rows = append(rows, fmt.Sprintf("%-11s %s", item.name, item.description))
 		}
 			keys := "enter send · ctrl+j newline · tab cycle modes · shift+tab Mihani Mode (no prompts) · esc (twice) stop request\n" +
-				"ctrl+r cycle reasoning effort (off/low/medium/high) · /effort menu\n" +
+				"ctrl+r cycle reasoning effort (off/low/medium/high) · ctrl+up/ctrl+down prompt history\n" +
+				"!command run a shell command · #note save project memory to .mihani.md · @file inline a file's contents\n" +
 				"pasting a multiline block keeps it in the composer as one message (enter sends it whole)\n" +
 				"↑↓/pgup/pgdn scroll · drag to select text, release copies it\n" +
 				"click a message → revert/fork/copy menu · click elsewhere closes the menu\n" +
@@ -490,6 +491,35 @@ func (m *Model) command(s string) tea.Cmd {
 			return nil
 		}
 		m.appendBlock(&block{kind: blockInfo, content: result})
+
+	case "/compact":
+		m.appendBlock(&block{kind: blockInfo, content: m.agent.CompactNow()})
+
+	case "/todos":
+		if i := m.lastTodoIndex(); i >= 0 {
+			content := m.blocks[i].content
+			if strings.TrimSpace(content) == "" {
+				content = "(updating...)"
+			}
+			m.appendBlock(&block{kind: blockInfo, content: "current todos:\n" + content})
+		} else {
+			m.appendBlock(&block{kind: blockInfo, content: "no todo list yet — the agent creates one for multi-step work"})
+		}
+
+	case "/rtl":
+		next := !rtlDisplay
+		rtlDisplay = next
+		flag := next
+		m.cfg.RTLDisplay = &flag
+		if err := m.cfg.Save(); err != nil {
+			m.notify("could not save setting: " + err.Error())
+		}
+		if next {
+			m.notify("RTL display on — persian text is shaped and reordered")
+		} else {
+			m.notify("RTL display off — raw logical text")
+		}
+		m.relayout()
 
 	case "/paste":
 		// Insert the clipboard into the composer without sending. This is

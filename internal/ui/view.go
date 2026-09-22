@@ -46,7 +46,7 @@ func (m *Model) composerHeight() int {
 // newlines and soft-wrapped overflow count, so long typing wraps upward (to
 // the next row) instead of running off the right edge.
 func (m *Model) resizeComposer() {
-	lines := wrappedLineCount(m.input.Value(), maxInt(12, m.width-8))
+	lines := wrappedLineCount(m.input.Value(), maxInt(12, m.width-6))
 	if lines > maxComposerLines {
 		lines = maxComposerLines
 	}
@@ -392,7 +392,7 @@ func (m *Model) welcome() string {
 	examples := []string{
 		"❯ explain what this project does",
 		"❯ find and fix the failing test",
-		"❯ refactor config loading into its own package",
+		"❯ @main.go این فایل را توضیح بده",
 		"❯ add tests to the biggest package — watch the todo list update",
 	}
 
@@ -428,7 +428,7 @@ func (m *Model) welcome() string {
 		)...,
 	)
 	return lipgloss.Place(maxInt(40, m.view.Width), maxInt(8, m.view.Height),
-		lipgloss.Center, lipgloss.Center, body)
+		lipgloss.Center, lipgloss.Center, displayLines(body))
 }
 
 func minInt(a, b int) int {

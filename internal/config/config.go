@@ -71,7 +71,11 @@ type Config struct {
 	// MihaniMode is the no-interruptions toggle (Shift+Tab / /mihani): when
 	// on, dangerous tools run without the permission prompt while a mode
 	// allows them. Persisted so the choice survives restarts.
-	MihaniMode    bool                `json:"mihani_mode,omitempty"`
+	MihaniMode bool `json:"mihani_mode,omitempty"`
+	// RTLDisplay controls Persian/Arabic rendering: letters shaped into joined
+	// forms + bidi reordering on display. nil = on; set false for terminals
+	// that implement bidi natively (the transform would double-reverse).
+	RTLDisplay    *bool               `json:"rtl_display,omitempty"`
 	UseMouse      *bool               `json:"use_mouse,omitempty"` // nil = off: the terminal handles text selection natively (always works); true = capture the mouse for click menus + in-app drag select
 	PlainUI       bool                `json:"plain_ui,omitempty"`  // true = ASCII borders + spinner (for terminals whose font lacks box-drawing/braille glyphs)
 	MaxIterations int                 `json:"max_iterations,omitempty"`
@@ -431,6 +435,12 @@ func (c Config) Budget() float64 {
 // providers run on their own credentials and are never capped here.
 func (c Config) IsBuiltinProvider(name string) bool {
 	return name == BuiltinPrimary || name == BuiltinSecondary
+}
+
+// RTLEnabled reports whether display-side Persian/Arabic shaping + bidi
+// reordering should run (default on).
+func (c Config) RTLEnabled() bool {
+	return c.RTLDisplay == nil || *c.RTLDisplay
 }
 
 // MouseEnabled reports whether the TUI should capture the mouse. Capturing

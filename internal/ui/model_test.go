@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -24,10 +23,11 @@ import (
 	"github.com/SSNamahsos/Mihani-Code/internal/usage"
 )
 
-func newInput(value string) textarea.Model {
-	ta := textarea.New()
-	ta.SetValue(value)
-	return ta
+func newInput(value string) *Composer {
+	c := newComposer()
+	c.SetWidth(74)
+	c.SetValue(value)
+	return c
 }
 
 // newTestModel builds a model whose components are fully initialized so
@@ -36,7 +36,7 @@ func newTestModel(width, height int) Model {
 	ta := newInput("")
 	ta.SetWidth(maxInt(20, width-6))
 	ta.SetHeight(1)
-	ci := textarea.New()
+	ci := newComposer()
 	ci.SetWidth(minInt(58, maxInt(20, width-20)))
 	ci.SetHeight(1)
 	vp := viewport.New(maxInt(20, width-2), maxInt(3, height-4))

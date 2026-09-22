@@ -40,6 +40,12 @@ func currentMode(index int) mode { return modes[index%len(modes)] }
 // "plain_ui": true in config.json.
 var plainUI bool
 
+// rtlDisplay enables Persian/Arabic support on display: letters are shaped
+// into their joined forms and bidi runs are reordered for terminals without
+// native bidi. Default on — it only affects lines that contain RTL script.
+// Toggle with /rtl or "rtl_display": false in config.json.
+var rtlDisplay = true
+
 // boxBorder is the standard rounded border, or an ASCII one in plain mode.
 func boxBorder() lipgloss.Border {
 	if plainUI {

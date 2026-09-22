@@ -8,6 +8,8 @@ Mihani Code is a native Go terminal AI coding agent. It provides a focused works
 - Streaming OpenAI-compatible responses with parallel tool-call reassembly
 - **Mihani-branded tools**: `Mihani_Read_File`, `Mihani_Write_File`, `Mihani_Edit_File`, `Mihani_Delete_File`, `Mihani_List_Dir`, `Mihani_Search_Files`, `Mihani_Grep` (regex matches as `path:line:`), `Mihani_Glob`, `Mihani_Bash`, `Mihani_Web_Search`, `Mihani_Web_Fetch`, `Mihani_Image_Reader`, `Mihani_Ask_User`, `Mihani_Todo_Write`
 - **Mihani Mode (Shift+Tab)**: the no-interruptions toggle — tools run without permission prompts while the header shows a red ⚡ MIHANI pill
+- **Persian / RTL support**: type and read فارسی correctly — letters shaped into joined forms and text reordered right-to-left, in the composer and the whole transcript
+- **Prompt power-ups**: `!command` shell passthrough, `#note` project memory, `@file` content inlining, `ctrl+up`/`ctrl+down` prompt history
 - Multi-turn tool execution loops: read, write, edit, delete (files or whole directories), search files plus shell commands
 - **Interactive questions**: the model can pause mid-task and ask you a question - options appear as a menu you pick from, or you type a custom answer; it may ask several in a row
 - **Live todo list**: the agent maintains a visible task card (`Mihani_Todo_Write`) that updates in place with ✓/◐/○ per item as work progresses
@@ -108,6 +110,10 @@ mihani --version
 | `/paste` | insert clipboard text into the composer without sending - the safe way to paste large prompts |
 | `[` / `]` on a message | keyboard menu: Copy / Fork / Revert for that message |
 | `ctrl+y` or `/copy` | copy Mihani's last reply to the clipboard - toast confirmation |
+| `ctrl+up` / `ctrl+down` | walk previously submitted prompts (draft preserved) |
+| `!command` | run a shell command in the workspace right now (`! git status`) |
+| `#note` | append a project-memory line to `.mihani.md` |
+| `@file` | inline a workspace file's contents into the prompt (`explain @main.go`) |
 | `esc` | interrupt request (press **twice** to terminate); otherwise clear input / close overlays |
 | `ctrl+c` | cancel request → deny pending approval → quit |
 
@@ -129,6 +135,9 @@ While a turn is running you can keep typing: additional prompts are queued and s
 - `/status`, `/session` workspace/session details
 - `/mcp` configured MCP servers
 - `/undo` restore the latest pre-change snapshot
+- `/compact` compact the conversation history now
+- `/todos` show the current todo list
+- `/rtl` toggle Persian/RTL display (shaping + bidi)
 - `/settings` auto-confirm toggle and limits
 - `/update` check for a newer Mihani Code and install it
 - `/quit` exit
@@ -160,6 +169,10 @@ Mihani Code ships with two built-in backends presented under Mihani branding - e
 | `mihani-pro` | Mihani Pro | `claude-sonnet-5` *(default)*, `claude-haiku-4-5`, `gpt-5.6-luna` |
 
 Switch with `/providers` and `/models`; `/connect` adds any other OpenAI-compatible endpoint under a name you choose. Upstream identifiers from earlier releases are renamed automatically on first launch and never shown in the UI.
+
+### Persian / RTL
+
+Mihani reads and writes Persian out of the box. Terminals without bidi support render Arabic-script text disconnected and reversed; Mihani fixes that on display by shaping letters into their joined presentation forms and reordering runs right-to-left — in the transcript, the composer, questions, menus, and diff previews. Typing stays natural: the composer shows your Persian shaped and ordered live (with the cursor in the right place) while the text sent to the model remains logical. If your terminal implements bidi natively, switch the transform off with `/rtl` or `"rtl_display": false` in config.json.
 
 ### Endpoints without native tool calling
 

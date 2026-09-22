@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -85,6 +84,9 @@ type modelsMsg struct {
 	err    error
 }
 
+// shellDoneMsg carries the output of a "! command" shell passthrough.
+type shellDoneMsg struct{ output string }
+
 type commandItem struct {
 	name        string
 	description string
@@ -111,6 +113,9 @@ var commands = []commandItem{
 	{name: "/mcp", description: "Show configured MCP servers"},
 	{name: "/skills", description: "List installed skills (auto-loaded by the AI)"},
 	{name: "/undo", description: "Restore the latest Mihani file snapshot"},
+	{name: "/compact", description: "Compact the conversation history now"},
+	{name: "/todos", description: "Show the current todo list"},
+	{name: "/rtl", description: "Toggle Persian/RTL display (shaping + bidi)"},
 	{name: "/paste", description: "Insert clipboard text into the composer without sending"},
 	{name: "/mouse", description: "Toggle mouse capture (off = native terminal text selection)"},
 	{name: "/settings", description: "Open Mihani settings"},
@@ -124,7 +129,7 @@ type Model struct {
 	root    string
 	version string
 
-	input textarea.Model
+	input *Composer
 	view  viewport.Model
 
 	agent *agent.Agent
@@ -187,7 +192,7 @@ type Model struct {
 	connectOpen   bool
 	connecting    bool
 	connectField  int
-	connectInput  textarea.Model
+	connectInput  *Composer
 	connectFields [3]string
 	connectName   string
 	connectURL    string
@@ -196,12 +201,17 @@ type Model struct {
 	keyEditOpen   bool
 	keyEditTarget string
 
-	sessionID    string
-	modeIndex    int
-	mihaniMode   bool // Shift+Tab no-interruptions mode: dangerous tools run without asking
-	branch       string // git branch shown in the status bar / welcome (refreshed per turn)
-	commandIndex int
-	quitting     bool
+	sessionID      string
+	modeIndex      int
+	mihaniMode     bool   // Shift+Tab no-interruptions mode: dangerous tools run without asking
+	branch         string // git branch shown in the status bar / welcome (refreshed per turn)
+	commandIndex   int
+	quitting       bool
+
+	// Prompt history (ctrl+up / ctrl+down walks submitted prompts).
+	promptHistory    []string
+	promptHistoryPos int // -1 = editing a fresh prompt
+	promptDraft      string
 
 	spend         float64 // rolling 24h shared-key spend for the current provider
 	personalSpend float64 // rolling 24h personal-key spend
@@ -254,19 +264,17 @@ func (m *Model) toastTTLor() time.Duration {
 // initialPrompt leaves the composer untouched.
 func New(cfg config.Config, version, resumeID, initialPrompt string) (Model, error) {
 	plainUI = cfg.PlainUI
+	rtlDisplay = cfg.RTLEnabled()
 	root, err := os.Getwd()
 	if err != nil {
 		return Model{}, err
 	}
-	ta := textarea.New()
+	ta := newComposer()
 	ta.Placeholder = "Ask Mihani to inspect, build, fix, or explain..."
 	ta.Focus()
 	ta.SetHeight(1)
-	ta.ShowLineNumbers = false
-	ta.Prompt = ""
-	ta.CharLimit = -1
 
-	connectInput := textarea.New()
+	connectInput := newComposer()
 	connectInput.SetHeight(1)
 
 	m := Model{
@@ -572,7 +580,7 @@ func Run(cfg config.Config, version, resumeID, initialPrompt string) error {
 	return runErr
 }
 
-func (m *Model) Init() tea.Cmd { return tea.Sequence(textarea.Blink, m.checkUpdateCmd()) }
+func (m *Model) Init() tea.Cmd { return m.checkUpdateCmd() }
 
 func tick() tea.Cmd {
 	return tea.Tick(120*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
@@ -695,6 +703,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return tea.Quit
 			}
 		}
+		return m, nil
+
+	case shellDoneMsg:
+		if strings.HasPrefix(x.output, "ERROR") {
+			m.appendBlock(&block{kind: blockError, content: firstLine(x.output)})
+		} else if strings.TrimSpace(x.output) == "" {
+			m.appendBlock(&block{kind: blockInfo, content: "(no output)"})
+		} else {
+			m.appendBlock(&block{kind: blockInfo, content: truncateText(x.output, 4000)})
+		}
+		m.status = "ready"
+		m.relayout()
 		return m, nil
 
 	case resultMsg:
@@ -894,6 +914,13 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		// Quick reasoning-effort cycle for the active model (none → low →
 		// medium → high → none); applies from the next request onward.
 		m.cycleEffort()
+		return m, nil, true
+
+	case key == "ctrl+up":
+		m.historyPrev()
+		return m, nil, true
+	case key == "ctrl+down":
+		m.historyNext()
 		return m, nil, true
 
 	case key == "ctrl+j", key == "alt+enter", key == "shift+enter":
@@ -1512,10 +1539,134 @@ func (m *Model) doFork(idx int) {
 }
 
 func (m *Model) submit(s string) tea.Cmd {
+	switch {
+	case strings.HasPrefix(s, "!"):
+		return m.runShellPassthrough(strings.TrimSpace(strings.TrimPrefix(s, "!")))
+	case strings.HasPrefix(s, "#"):
+		m.appendProjectMemory(strings.TrimSpace(strings.TrimPrefix(s, "#")))
+		return nil
+	}
 	if strings.HasPrefix(s, "/") {
 		return m.command(s)
 	}
 	return m.startTurn(s)
+}
+
+// runShellPassthrough executes a "! command" line directly in the workspace —
+// the user ran it on purpose, so no permission modal — and appends the output.
+func (m *Model) runShellPassthrough(command string) tea.Cmd {
+	if command == "" {
+		m.notify("usage: ! <command>  e.g. ! git status")
+		return nil
+	}
+	if m.busy {
+		m.notify("wait for the current turn to finish")
+		return nil
+	}
+	m.appendBlock(&block{kind: blockInfo, content: "! " + command})
+	m.status = "running shell"
+	m.refreshView()
+	root := m.root
+	return func() tea.Msg {
+		out := (tools.Runner{Root: root}).Run(context.Background(), tools.ToolBash, map[string]any{"command": command})
+		return shellDoneMsg{output: out}
+	}
+}
+
+// appendProjectMemory handles "# note": the note lands in .mihani.md so every
+// future session (and the current agent) reads it as project instructions.
+func (m *Model) appendProjectMemory(note string) {
+	if note == "" {
+		m.notify("usage: # <note> — saved to .mihani.md")
+		return
+	}
+	path := filepath.Join(m.root, ".mihani.md")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		m.notify("could not write .mihani.md: " + err.Error())
+		return
+	}
+	defer f.Close()
+	if _, err := f.WriteString(note + "\n"); err != nil {
+		m.notify("could not write .mihani.md: " + err.Error())
+		return
+	}
+	m.notify("saved to .mihani.md — future sessions will read it")
+}
+
+var mentionRe = regexp.MustCompile(`@([A-Za-z0-9_\-./\\]+)`)
+
+// expandMentions inlines workspace files referenced with @path into the prompt
+// before it reaches the model. Unknown paths (or an @handle that never names a
+// real file) are left untouched; size caps keep a stray mention from blowing
+// up the context, and contents pass through the secret redactor.
+func expandMentions(prompt, root string) string {
+	if !strings.Contains(prompt, "@") {
+		return prompt
+	}
+	const perFile = 16 * 1024
+	const totalCap = 64 * 1024
+	total := 0
+	return mentionRe.ReplaceAllStringFunc(prompt, func(match string) string {
+		path := strings.TrimPrefix(match, "@")
+		if total >= totalCap || filepath.IsAbs(path) || strings.Contains(path, "..") {
+			return match
+		}
+		full := filepath.Join(root, path)
+		info, err := os.Stat(full)
+		if err != nil || !info.Mode().IsRegular() || info.Size() > perFile {
+			return match
+		}
+		data, err := os.ReadFile(full)
+		if err != nil {
+			return match
+		}
+		content := secrets.Redact(string(data))
+		total += len(content)
+		return match + "\n<file path=\"" + path + "\">\n" + content + "\n</file>\n"
+	})
+}
+
+// historyPrev / historyNext walk previously submitted prompts.
+func (m *Model) historyPrev() {
+	if len(m.promptHistory) == 0 {
+		return
+	}
+	if m.promptHistoryPos == -1 {
+		m.promptHistoryPos = len(m.promptHistory)
+		m.promptDraft = m.input.Value()
+	}
+	if m.promptHistoryPos > 0 {
+		m.promptHistoryPos--
+		m.input.SetValue(m.promptHistory[m.promptHistoryPos])
+		m.resizeComposer()
+	}
+}
+
+func (m *Model) historyNext() {
+	if m.promptHistoryPos == -1 {
+		return
+	}
+	if m.promptHistoryPos < len(m.promptHistory)-1 {
+		m.promptHistoryPos++
+		m.input.SetValue(m.promptHistory[m.promptHistoryPos])
+	} else {
+		m.promptHistoryPos = -1
+		m.input.SetValue(m.promptDraft)
+	}
+	m.resizeComposer()
+}
+
+// recordPrompt stores a submitted prompt for ctrl+up/ctrl+down recall.
+func (m *Model) recordPrompt(prompt string) {
+	if n := len(m.promptHistory); n > 0 && m.promptHistory[n-1] == prompt {
+		return
+	}
+	m.promptHistory = append(m.promptHistory, prompt)
+	if len(m.promptHistory) > 200 {
+		m.promptHistory = m.promptHistory[1:]
+	}
+	m.promptHistoryPos = -1
 }
 
 func (m *Model) startTurn(prompt string) tea.Cmd {
@@ -1528,6 +1679,7 @@ func (m *Model) startTurn(prompt string) tea.Cmd {
 	if kind == usage.Personal {
 		m.notify("Shared limit reached - using your personal API key")
 	}
+	m.recordPrompt(prompt)
 	m.closeActiveAssistant()
 	m.blocks = append(m.blocks, &block{kind: blockUser, content: prompt})
 	m.stickBottom = true
@@ -1539,6 +1691,7 @@ func (m *Model) startTurn(prompt string) tea.Cmd {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
+	expanded := expandMentions(prompt, m.root)
 	modeName := currentMode(m.modeIndex).name
 	cfg := m.effectiveCfg(kind)
 	a := m.agent
@@ -1570,7 +1723,7 @@ func (m *Model) startTurn(prompt string) tea.Cmd {
 		}
 	}
 	return tea.Sequence(tick(), func() tea.Msg {
-		return resultMsg{m.runTurn(ctx, prompt, modeName, approve, emit)}
+		return resultMsg{m.runTurn(ctx, expanded, modeName, approve, emit)}
 	})
 }
 
