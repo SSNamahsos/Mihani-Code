@@ -2,6 +2,13 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.4.1
+
+### Fixed
+- **Persian text rendered with the wrong font, weight, and connections.** The shaped (presentation-forms) output bypassed Windows Terminal's own text shaper, so glyphs fell back to a different font — disconnected letters, lost bold, misplaced words. RTL display is now a three-mode system: **bidi** (default) reorders text but keeps the standard Arabic codepoints so the terminal's own shaper joins them correctly; **shaped** pre-joins glyphs for terminals with no shaper; **off** passes text through for fully bidi-native terminals. `/rtl` cycles the modes and remembers the choice.
+- **RTL lines started at the left edge.** Persian paragraphs and typed composer text are now right-aligned, anchoring to the right edge of the screen like proper RTL layout.
+- **The app could hard-crash the terminal.** Update and render paths are now panic-guarded: an internal error is logged to `mihani-panic.log` in your TEMP folder, a toast announces it, and the app keeps running instead of taking the terminal down.
+
 ## v0.4.0
 
 ### Added

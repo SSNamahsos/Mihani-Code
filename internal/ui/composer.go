@@ -285,8 +285,8 @@ func (c *Composer) View() string {
 				(c.col >= ch.start && c.col < ch.start+rowLen ||
 					(c.col == ch.start+rowLen && isLastChunk))
 			text := string(ch.runes)
-			if rtlDisplay && rtl.HasRTL(text) {
-				shaped := rtl.DisplayANSI(text)
+			if rtlMode != rtl.ModeOff && rtl.HasRTL(text) {
+				shaped := rtl.DisplayANSI(text, rtlMode)
 				if onCursorRow {
 					p := c.col - ch.start
 					if c.col == len(line) && isLastChunk {
@@ -296,9 +296,9 @@ func (c *Composer) View() string {
 					if cellIdx < 0 {
 						cellIdx = 0
 					}
-					rows = append(rows, drawCursor(shaped, cellIdx))
+					rows = append(rows, alignRTL(drawCursor(shaped, cellIdx), w))
 				} else {
-					rows = append(rows, shaped)
+					rows = append(rows, alignRTL(shaped, w))
 				}
 			} else {
 				if onCursorRow {

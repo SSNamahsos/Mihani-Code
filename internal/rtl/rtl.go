@@ -204,24 +204,80 @@ type cell struct {
 	r   rune
 }
 
-// Display returns a visually-ordered, Arabic-shaped copy of one logical line
-// for terminals without native bidi support. Lines without RTL characters
-// come back unchanged (fast path). NEWLINES MUST NOT APPEAR — transform each
-// line separately.
-func Display(s string) string {
-	if !HasRTL(s) {
-		return s
+// Mode selects how right-to-left text is prepared for display. Terminals
+// differ wildly here, so Mihani supports three:
+//
+//	ModeOff    — pass logical text through untouched. For terminals that
+//	             implement bidi reordering AND Arabic shaping natively.
+//	ModeBidi   — reorder the bidi runs into visual order but keep the base
+//	             U+0600 codepoints, so the terminal's own shaper still joins
+//	             the letters (Windows Terminal shapes via DirectWrite but
+//	             does not reorder). Default.
+//	ModeShaped — shape into Arabic Presentation Forms and reorder. For dumb
+//	             terminals that do neither (classic console, many Linux
+//	             terminal emulators).
+type Mode string
+
+const (
+	ModeOff    Mode = "off"
+	ModeBidi   Mode = "bidi"
+	ModeShaped Mode = "shaped"
+)
+
+// NormalizeMode maps any stored string to a valid Mode, defaulting to bidi.
+func NormalizeMode(s string) Mode {
+	switch Mode(strings.ToLower(strings.TrimSpace(s))) {
+	case ModeOff:
+		return ModeOff
+	case ModeShaped:
+		return ModeShaped
+	default:
+		return ModeBidi
 	}
-	return reorder(shapeCells(splitCells(s)), baseDirection(s))
+}
+
+// RTLBase reports whether the line's first strong character is right-to-left.
+// ANSI escape sequences are ignored. Use it to decide right-alignment.
+func RTLBase(s string) bool {
+	return baseDirection(stripEscapes(s)) == bidi.RightToLeft
+}
+
+// Display transforms one logical line for display under the given mode.
+// NEWLINES MUST NOT APPEAR — transform each line separately.
+func Display(s string, mode Mode) string {
+	switch mode {
+	case ModeOff:
+		return s
+	case ModeBidi:
+		if !HasRTL(s) {
+			return s
+		}
+		return reorder(splitCells(s), baseDirection(s))
+	default: // ModeShaped
+		if !HasRTL(s) {
+			return s
+		}
+		return reorder(shapeCells(splitCells(s)), baseDirection(s))
+	}
 }
 
 // DisplayANSI is Display for a line that already contains ANSI styling: the
 // escape sequences survive intact and travel with the runes they style.
-func DisplayANSI(s string) string {
-	if !HasRTL(stripEscapes(s)) {
+func DisplayANSI(s string, mode Mode) string {
+	switch mode {
+	case ModeOff:
 		return s
+	case ModeBidi:
+		if !HasRTL(stripEscapes(s)) {
+			return s
+		}
+		return reorder(splitCells(s), baseDirection(stripEscapes(s)))
+	default: // ModeShaped
+		if !HasRTL(stripEscapes(s)) {
+			return s
+		}
+		return reorder(shapeCells(splitCells(s)), baseDirection(stripEscapes(s)))
 	}
-	return reorder(shapeCells(splitCells(s)), baseDirection(stripEscapes(s)))
 }
 
 func splitCells(s string) []cell {

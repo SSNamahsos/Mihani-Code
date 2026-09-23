@@ -12,6 +12,8 @@ import (
 // Typing Persian: Value() keeps the LOGICAL order for the model while the
 // rendered view shows SHAPED glyphs in visual (right-to-left) order.
 func TestComposerPersianTyping(t *testing.T) {
+	setRTLMode("shaped")
+	defer setRTLMode("bidi")
 	c := newComposer()
 	c.SetWidth(60)
 	c.Focus()
@@ -24,8 +26,9 @@ func TestComposerPersianTyping(t *testing.T) {
 	if !strings.Contains(view, "\uFEE1\uFEFC\uFEB3") {
 		t.Fatalf("view does not show shaped visual persian: %U", []rune(view))
 	}
-	// The cursor rides on the leftmost glyph while appending.
-	if !strings.HasPrefix(view, composerCursorStyle.Render("\uFEE1")) {
+	// The cursor rides on the leftmost glyph while appending (the row itself
+	// is right-aligned, so it sits after the leading padding).
+	if !strings.Contains(view, composerCursorStyle.Render("\uFEE1")) {
 		t.Fatal("cursor not rendered at the append position")
 	}
 }
@@ -34,12 +37,14 @@ func TestComposerPersianTyping(t *testing.T) {
 // flow: new glyphs appear to its left), and trails at the right edge when
 // the cursor is at the logical start.
 func TestComposerCursorVisualPosition(t *testing.T) {
+	setRTLMode("shaped")
+	defer setRTLMode("bidi")
 	c := newComposer()
 	c.SetWidth(60)
 	c.SetValue("سلام") // cursor at logical end
 	c.Focus()
 	view := stripANSI(c.View())
-	if !strings.HasPrefix(view, composerCursorStyle.Render("\uFEE1")) {
+	if !strings.Contains(view, composerCursorStyle.Render("\uFEE1")) {
 		t.Fatalf("append cursor should sit on the leftmost glyph: %q", view)
 	}
 	c.col = 0 // logical start

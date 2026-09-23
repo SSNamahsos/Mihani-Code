@@ -64,19 +64,32 @@ func indentBlock(s string, pad int) string {
 	return strings.Join(lines, "\n")
 }
 
-// displayLines applies Persian/Arabic shaping + bidi reordering to every
-// display line when RTL support is on (default; toggle with /rtl). It runs on
-// final styled output, so ANSI styling survives and non-RTL lines are cheap
-// no-ops.
-func displayLines(s string) string {
-	if !rtlDisplay {
-		return s
-	}
+// displayLines transforms every display line for RTL (mode-dependent shaping
+// + bidi reordering) and, when w > 0, right-aligns lines whose base direction
+// is RTL so Persian paragraphs anchor to the right edge like they should.
+// w <= 0 skips alignment (bordered cards keep their chrome left-aligned).
+func displayLines(s string, w int) string {
 	lines := strings.Split(s, "\n")
 	for i, l := range lines {
-		lines[i] = rtl.DisplayANSI(l)
+		l = rtl.DisplayANSI(l, rtlMode)
+		if w > 0 {
+			l = alignRTL(l, w)
+		}
+		lines[i] = l
 	}
 	return strings.Join(lines, "\n")
+}
+
+// alignRTL pads an RTL-base line on the left so its text ends at column w.
+func alignRTL(line string, w int) string {
+	if w <= 0 || !rtl.RTLBase(line) {
+		return line
+	}
+	pad := w - lipgloss.Width(line)
+	if pad <= 0 {
+		return line
+	}
+	return strings.Repeat(" ", pad) + line
 }
 
 // render returns the block's display output, re-rendering only when stale.
@@ -84,7 +97,7 @@ func (b *block) render(w int, spinnerChar string) string {
 	if b.width == w && b.width != 0 {
 		return b.rendered
 	}
-	b.rendered = displayLines(b.renderInner(w, spinnerChar))
+	b.rendered = b.renderInner(w, spinnerChar)
 	b.width = w
 	return b.rendered
 }
@@ -102,11 +115,11 @@ func (b *block) renderInner(w int, spinnerChar string) string {
 	case blockTodo:
 		return b.renderTodo(w, spinnerChar)
 	case blockInfo:
-		return lipgloss.NewStyle().Foreground(colDim).
-			Render(indentBlock(wrap(b.content, w-2), 2))
+		return displayLines(lipgloss.NewStyle().Foreground(colDim).
+			Render(indentBlock(wrap(b.content, w-2), 2)), w-4)
 	case blockError:
-		return lipgloss.NewStyle().Foreground(colRed).Render(
-			indentBlock(wrap("✗ "+b.content, w-2), 2))
+		return displayLines(lipgloss.NewStyle().Foreground(colRed).Render(
+			indentBlock(wrap("✗ "+b.content, w-2), 2)), w-4)
 	}
 	return ""
 }
@@ -142,7 +155,7 @@ func (b *block) renderUser(w int) string {
 		BorderForeground(border).
 		Padding(0, 1).
 		Width(maxInt(12, w-2)).
-		Render(header + "\n" + inner.String())
+		Render(displayLines(header+"\n"+inner.String(), w-6))
 }
 
 // focused marks the block under the keyboard action cursor.
@@ -159,7 +172,7 @@ func (b *block) renderAssistant(w int, spinnerChar string) string {
 		}
 		body = lipgloss.NewStyle().Foreground(colText).Render(wrap(text, w-2))
 	}
-	return indentBlock(body, 2)
+	return indentBlock(displayLines(body, w-2), 2)
 }
 
 // renderThinking shows live model reasoning in a dimmed, clearly secondary
@@ -181,7 +194,7 @@ func (b *block) renderThinking(w int, spinnerChar string) string {
 		out = strings.Join(shown, "\n") + "\n" +
 			lipgloss.NewStyle().Foreground(colFaint).Render("  … reasoning continues")
 	}
-	return out
+	return displayLines(out, w-4)
 }
 
 // sanitizeStream converts raw streamed model output into display-safe text:
@@ -281,7 +294,7 @@ func (b *block) renderTool(w int, spinnerChar string) string {
 		BorderForeground(borderColor).
 		Padding(0, 1).
 		Width(maxInt(14, w-2)).
-		Render(out)
+		Render(displayLines(out, 0))
 }
 
 // renderTodo shows the live task list: one line per item, tinted by status,
@@ -324,7 +337,7 @@ func (b *block) renderTodo(w int, spinnerChar string) string {
 		BorderForeground(borderColor).
 		Padding(0, 1).
 		Width(maxInt(14, w-2)).
-		Render(header + "\n" + body.String())
+		Render(displayLines(header+"\n"+body.String(), 0))
 }
 
 const maxPreviewLines = 14

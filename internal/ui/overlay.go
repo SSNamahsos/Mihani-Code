@@ -15,6 +15,7 @@ import (
 	"github.com/SSNamahsos/Mihani-Code/internal/config"
 	"github.com/SSNamahsos/Mihani-Code/internal/gitx"
 	"github.com/SSNamahsos/Mihani-Code/internal/mcp"
+	"github.com/SSNamahsos/Mihani-Code/internal/rtl"
 	"github.com/SSNamahsos/Mihani-Code/internal/skills"
 	"github.com/SSNamahsos/Mihani-Code/internal/secrets"
 	"github.com/SSNamahsos/Mihani-Code/internal/session"
@@ -285,7 +286,7 @@ func (m *Model) overlayView() string {
 		BorderForeground(colBorder).
 		Padding(1, 2).
 		Width(boxWidth).
-		Render(displayLines(body))
+		Render(displayLines(body, 0))
 	return lipgloss.Place(m.width, maxInt(1, m.height), lipgloss.Center, lipgloss.Center, box)
 }
 
@@ -507,17 +508,29 @@ func (m *Model) command(s string) tea.Cmd {
 		}
 
 	case "/rtl":
-		next := !rtlDisplay
-		rtlDisplay = next
-		flag := next
-		m.cfg.RTLDisplay = &flag
+		// Cycle: bidi (default) → shaped → off → bidi. Each mode fits a
+		// different terminal's native bidi/shaping support.
+		var next string
+		switch rtlMode {
+		case rtl.ModeBidi:
+			next = "shaped"
+		case rtl.ModeShaped:
+			next = "off"
+		default:
+			next = "bidi"
+		}
+		setRTLMode(next)
+		m.cfg.RTLDisplay = next
 		if err := m.cfg.Save(); err != nil {
 			m.notify("could not save setting: " + err.Error())
 		}
-		if next {
-			m.notify("RTL display on — persian text is shaped and reordered")
-		} else {
-			m.notify("RTL display off — raw logical text")
+		switch next {
+		case "shaped":
+			m.notify("RTL: shaped glyphs + reordering (dumb terminals)")
+		case "off":
+			m.notify("RTL: off — your terminal handles bidi and shaping")
+		default:
+			m.notify("RTL: bidi reorder, terminal shapes the letters (Windows Terminal)")
 		}
 		m.relayout()
 

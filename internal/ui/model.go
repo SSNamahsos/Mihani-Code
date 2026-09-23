@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -115,7 +116,7 @@ var commands = []commandItem{
 	{name: "/undo", description: "Restore the latest Mihani file snapshot"},
 	{name: "/compact", description: "Compact the conversation history now"},
 	{name: "/todos", description: "Show the current todo list"},
-	{name: "/rtl", description: "Toggle Persian/RTL display (shaping + bidi)"},
+	{name: "/rtl", description: "Cycle RTL display mode (bidi / shaped / off)"},
 	{name: "/paste", description: "Insert clipboard text into the composer without sending"},
 	{name: "/mouse", description: "Toggle mouse capture (off = native terminal text selection)"},
 	{name: "/settings", description: "Open Mihani settings"},
@@ -231,6 +232,8 @@ type Model struct {
 	burstRunes   int
 	lastSubmitAt time.Time // set when a submit happened while a burst was active
 
+	lastGoodView string // last successfully rendered frame (panic fallback)
+
 	reconnectFailures int // consecutive provider failures since the last live progress (reset when the AI keeps working)
 	lastRetries       int // retries the previous turn needed; shown in its error block
 
@@ -264,7 +267,7 @@ func (m *Model) toastTTLor() time.Duration {
 // initialPrompt leaves the composer untouched.
 func New(cfg config.Config, version, resumeID, initialPrompt string) (Model, error) {
 	plainUI = cfg.PlainUI
-	rtlDisplay = cfg.RTLEnabled()
+	setRTLMode(cfg.RTLMode())
 	root, err := os.Getwd()
 	if err != nil {
 		return Model{}, err
@@ -586,7 +589,35 @@ func tick() tea.Cmd {
 	return tea.Tick(120*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+// Update guards the whole update cycle: a panic in any handler would kill
+// the program and leave the terminal in a broken mouse-tracking state (the
+// reported "terminal crash"). Instead the panic is logged and the app keeps
+// running; the stack lands in %TEMP%\mihani-panic.log for diagnosis.
+func (m *Model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
+	defer func() {
+		if r := recover(); r != nil {
+			logPanic(r)
+			m.notify("internal error caught — app kept running (log: mihani-panic.log in TEMP)")
+			next, cmd = m, nil
+		}
+	}()
+	return m.update(msg)
+}
+
+// logPanic appends a panic's value and stack to mihani-panic.log in the temp
+// directory so field crashes stay diagnosable after the panic guard keeps
+// the app alive.
+func logPanic(r any) {
+	f, err := os.OpenFile(filepath.Join(os.TempDir(), "mihani-panic.log"),
+		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s panic: %v\n%s\n", time.Now().Format("2006-01-02 15:04:05"), r, debug.Stack())
+}
+
+func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch x := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = x.Width, x.Height

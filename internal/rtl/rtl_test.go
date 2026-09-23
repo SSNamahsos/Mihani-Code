@@ -46,7 +46,7 @@ func TestShapeZWNJBreaksJoining(t *testing.T) {
 // Display turns logical Persian into visual order for terminals without bidi:
 // the shaped glyphs come back right-to-left.
 func TestDisplayReversesForVisual(t *testing.T) {
-	got := Display("سلام")
+	got := Display("سلام", ModeShaped)
 	if got != "\uFEE1\uFEFC\uFEB3" {
 		t.Fatalf("Display(سلام) = %U, want [\\uFEE1 \\uFEFC \\uFEB3]", []rune(got))
 	}
@@ -55,7 +55,7 @@ func TestDisplayReversesForVisual(t *testing.T) {
 // A persian word followed by latin: base RTL puts the latin word to the left,
 // the persian word to the right reading correctly.
 func TestDisplayMixed(t *testing.T) {
-	got := Display("سلام world")
+	got := Display("سلام world", ModeShaped)
 	if got != "world \uFEE1\uFEFC\uFEB3" {
 		t.Fatalf("Display(سلام world) = %q (%U)", got, []rune(got))
 	}
@@ -63,7 +63,7 @@ func TestDisplayMixed(t *testing.T) {
 
 // Digits flow left-to-right even inside an RTL sentence.
 func TestDisplayKeepsDigitOrder(t *testing.T) {
-	got := Display("نسخه ۱۲۳۴ خوب است")
+	got := Display("نسخه ۱۲۳۴ خوب است", ModeShaped)
 	for _, want := range []string{"۱", "۲", "۳", "۴"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("digit %s lost in %q", want, got)
@@ -78,7 +78,7 @@ func TestDisplayKeepsDigitOrder(t *testing.T) {
 // ANSI styling must survive the transform: no mangled escapes.
 func TestDisplayANSIPreservesEscapes(t *testing.T) {
 	line := "\x1b[31mسلام\x1b[0m"
-	got := DisplayANSI(line)
+	got := DisplayANSI(line, ModeShaped)
 	if strings.Count(got, "\x1b[31m") != 1 || strings.Count(got, "\x1b[0m") != 1 {
 		t.Fatalf("escapes corrupted: %q", got)
 	}
@@ -94,18 +94,46 @@ func TestDisplayANSIPreservesEscapes(t *testing.T) {
 // Non-RTL input short-circuits unchanged.
 func TestDisplayFastPath(t *testing.T) {
 	const s = "plain english line"
-	if got := Display(s); got != s {
+	if got := Display(s, ModeShaped); got != s {
 		t.Fatalf("fast path changed the text: %q", got)
 	}
-	if got := DisplayANSI("\x1b[1mbold\x1b[0m"); got != "\x1b[1mbold\x1b[0m" {
+	if got := DisplayANSI("\x1b[1mbold\x1b[0m", ModeShaped); got != "\x1b[1mbold\x1b[0m" {
 		t.Fatalf("ANSI fast path changed the text: %q", got)
 	}
 }
 
 // Hebrew gets bidi reordering (no shaping) too.
 func TestHebrewBidi(t *testing.T) {
-	got := Display("שלום")
+	got := Display("שלום", ModeShaped)
 	if got != reverseRunes("שלום") {
 		t.Fatalf("hebrew not reversed: %q", got)
+	}
+}
+
+// ModeOff passes RTL text through untouched (terminals with native bidi).
+func TestModeOffPassthrough(t *testing.T) {
+	const s = "سلام دنیا"
+	if got := Display(s, ModeOff); got != s {
+		t.Fatalf("ModeOff changed the text: %q", got)
+	}
+	if got := DisplayANSI("\x1b[31m"+s+"\x1b[0m", ModeOff); got != "\x1b[31m"+s+"\x1b[0m" {
+		t.Fatalf("ModeOff changed styled text: %q", got)
+	}
+}
+
+// ModeBidi reorders runs but keeps the BASE Arabic codepoints, so a terminal
+// with a native shaper (Windows Terminal) still joins the letters itself.
+func TestModeBidiKeepsBaseCodepoints(t *testing.T) {
+	got := Display("سلام", ModeBidi)
+	// Reversed LOGICAL order, no presentation forms: م ا ل س
+	if got != "\u0645\u0627\u0644\u0633" {
+		t.Fatalf("ModeBidi = %U, want base letters reversed", []rune(got))
+	}
+	if NormalizeMode("off") != ModeOff || NormalizeMode("shaped") != ModeShaped ||
+		NormalizeMode("bidi") != ModeBidi || NormalizeMode("garbage") != ModeBidi {
+		t.Fatal("NormalizeMode broken")
+	}
+	if !RTLBase("سلام") || RTLBase("hello") {
+		t.Fatal("RTLBase wrong")
 	}
 }

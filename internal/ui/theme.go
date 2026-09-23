@@ -1,6 +1,10 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/SSNamahsos/Mihani-Code/internal/rtl"
+)
 
 // Dark palette mirroring opencode's signature look: near-black neutral grays
 // with a soft peach-orange primary accent.
@@ -40,11 +44,15 @@ func currentMode(index int) mode { return modes[index%len(modes)] }
 // "plain_ui": true in config.json.
 var plainUI bool
 
-// rtlDisplay enables Persian/Arabic support on display: letters are shaped
-// into their joined forms and bidi runs are reordered for terminals without
-// native bidi. Default on — it only affects lines that contain RTL script.
-// Toggle with /rtl or "rtl_display": false in config.json.
-var rtlDisplay = true
+// rtlMode selects how Persian/Arabic text is prepared for display (see the
+// rtl package): "off" = terminal handles bidi+shaping natively, "bidi" =
+// reorder runs and let the terminal's shaper join the base letters (default,
+// matches Windows Terminal), "shaped" = presentation forms + reorder for
+// terminals that do neither. /rtl cycles the modes.
+var rtlMode = rtl.ModeBidi
+
+// setRTLMode switches the display mode from a config string.
+func setRTLMode(s string) { rtlMode = rtl.NormalizeMode(s) }
 
 // boxBorder is the standard rounded border, or an ASCII one in plain mode.
 func boxBorder() lipgloss.Border {

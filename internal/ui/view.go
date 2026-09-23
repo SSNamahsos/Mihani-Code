@@ -91,7 +91,25 @@ func (m *Model) paletteHeight() int {
 	return n + 2
 }
 
-func (m *Model) View() string {
+// View guards rendering: a render panic must never take the whole terminal
+// down (the reported "terminal crash"). The last successful frame is
+// re-shown and the stack lands in mihani-panic.log for diagnosis.
+func (m *Model) View() (out string) {
+	defer func() {
+		if r := recover(); r != nil {
+			logPanic(r)
+			out = m.lastGoodView
+			if out == "" {
+				out = "mihani — render error caught (log: mihani-panic.log in TEMP)"
+			}
+		}
+	}()
+	out = m.viewInner()
+	m.lastGoodView = out
+	return out
+}
+
+func (m *Model) viewInner() string {
 	if m.width == 0 || m.height == 0 {
 		return lipgloss.NewStyle().Foreground(colDim).Render("starting mihani…")
 	}
@@ -428,7 +446,7 @@ func (m *Model) welcome() string {
 		)...,
 	)
 	return lipgloss.Place(maxInt(40, m.view.Width), maxInt(8, m.view.Height),
-		lipgloss.Center, lipgloss.Center, displayLines(body))
+		lipgloss.Center, lipgloss.Center, displayLines(body, 0))
 }
 
 func minInt(a, b int) int {

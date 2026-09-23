@@ -172,7 +172,13 @@ Switch with `/providers` and `/models`; `/connect` adds any other OpenAI-compati
 
 ### Persian / RTL
 
-Mihani reads and writes Persian out of the box. Terminals without bidi support render Arabic-script text disconnected and reversed; Mihani fixes that on display by shaping letters into their joined presentation forms and reordering runs right-to-left — in the transcript, the composer, questions, menus, and diff previews. Typing stays natural: the composer shows your Persian shaped and ordered live (with the cursor in the right place) while the text sent to the model remains logical. If your terminal implements bidi natively, switch the transform off with `/rtl` or `"rtl_display": false` in config.json.
+Mihani reads and writes Persian out of the box. Terminals without bidi support render Arabic-script text disconnected and reversed; Mihani fixes that on display — in the transcript, the composer, questions, menus, and diff previews. Typing stays natural: the composer shows your Persian ordered live (with the cursor in the right place) while the text sent to the model remains logical, and RTL lines are right-aligned so paragraphs anchor to the right edge.
+
+Three display modes exist because terminals differ; `/rtl` cycles them (persisted as `"rtl_display"` in config.json):
+
+- **`bidi` (default)** — reorders the text into visual order but keeps the standard Arabic codepoints, so your terminal's own text shaper joins the letters with the correct font and weight. Right for Windows Terminal and anything else that shapes but doesn't reorder.
+- **`shaped`** — converts letters to their pre-joined presentation forms and reorders. For terminals that do neither (classic console, many Linux terminals).
+- **`off`** — passes text through untouched. For terminals with full native bidi + shaping.
 
 ### Endpoints without native tool calling
 

@@ -39,7 +39,7 @@ func (m *Model) approvalOverlay() string {
 		BorderForeground(colAmber).
 		Padding(1, 3).
 		Width(boxWidth).
-		Render(displayLines(body))
+		Render(displayLines(body, 0))
 	return lipgloss.Place(m.width, maxInt(1, m.height), lipgloss.Center, lipgloss.Center, box)
 }
 

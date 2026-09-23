@@ -72,10 +72,12 @@ type Config struct {
 	// on, dangerous tools run without the permission prompt while a mode
 	// allows them. Persisted so the choice survives restarts.
 	MihaniMode bool `json:"mihani_mode,omitempty"`
-	// RTLDisplay controls Persian/Arabic rendering: letters shaped into joined
-	// forms + bidi reordering on display. nil = on; set false for terminals
-	// that implement bidi natively (the transform would double-reverse).
-	RTLDisplay    *bool               `json:"rtl_display,omitempty"`
+	// RTLDisplay selects how Persian/Arabic text is prepared for terminals
+	// without full native bidi: "off" (terminal does everything), "bidi"
+	// (reorder runs, terminal shapes the base letters — default, matches
+	// Windows Terminal), "shaped" (presentation forms + reorder for dumb
+	// terminals). /rtl cycles the modes.
+	RTLDisplay    string              `json:"rtl_display,omitempty"`
 	UseMouse      *bool               `json:"use_mouse,omitempty"` // nil = off: the terminal handles text selection natively (always works); true = capture the mouse for click menus + in-app drag select
 	PlainUI       bool                `json:"plain_ui,omitempty"`  // true = ASCII borders + spinner (for terminals whose font lacks box-drawing/braille glyphs)
 	MaxIterations int                 `json:"max_iterations,omitempty"`
@@ -437,10 +439,15 @@ func (c Config) IsBuiltinProvider(name string) bool {
 	return name == BuiltinPrimary || name == BuiltinSecondary
 }
 
-// RTLEnabled reports whether display-side Persian/Arabic shaping + bidi
-// reordering should run (default on).
-func (c Config) RTLEnabled() bool {
-	return c.RTLDisplay == nil || *c.RTLDisplay
+// RTLMode returns the configured RTL display mode, normalized to one of
+// "off" | "bidi" | "shaped" (empty/unknown = "bidi").
+func (c Config) RTLMode() string {
+	switch strings.ToLower(strings.TrimSpace(c.RTLDisplay)) {
+	case "off", "shaped":
+		return strings.ToLower(strings.TrimSpace(c.RTLDisplay))
+	default:
+		return "bidi"
+	}
 }
 
 // MouseEnabled reports whether the TUI should capture the mouse. Capturing
