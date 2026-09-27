@@ -2,6 +2,11 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.4.4
+
+### Fixed
+- **`mihani` failed with "not a valid application for this OS platform" after updating.** A download cut short by a dropped connection keeps a valid PE header, so the truncated binary passed every check, got installed, and Windows then refused to run it. The updater and both installer scripts now compare the downloaded size against the size published for the release and retry (or fall back to a source build) instead of installing a broken file.
+
 ## v0.4.3
 
 ### Fixed
