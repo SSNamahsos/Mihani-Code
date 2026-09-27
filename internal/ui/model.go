@@ -694,6 +694,12 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.updateCheckErr = "no release found"
 			}
+			// A failed check must never be a dead end: the startup check is
+			// silent on purpose, but if the user explicitly asked for /update,
+			// tell them how to get the release by hand.
+			if m.updateWantsOpen {
+				m.notify("Update check failed - " + update.ManualInstallHint())
+			}
 		}
 		if m.updateWantsOpen {
 			m.updateWantsOpen = false

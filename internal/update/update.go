@@ -25,7 +25,96 @@ const Repo = "SSNamahsos/Mihani-Code"
 // HomePage is where the update is published and browsed.
 const HomePage = "https://github.com/" + Repo + "/releases"
 
-const releasesURL = "https://api.github.com/repos/" + Repo + "/releases/latest"
+// ManualInstallHint is the copy-pasteable one-liner that installs the latest
+// release. It is shown whenever the in-app update cannot reach GitHub, so a
+// flaky route never leaves the user with a bare timeout and no way forward.
+func ManualInstallHint() string {
+	if runtime.GOOS == "windows" {
+		return "irm https://raw.githubusercontent.com/" + Repo + "/main/install.ps1 | iex"
+	}
+	return "curl -fsSL https://raw.githubusercontent.com/" + Repo + "/main/install.sh | sh"
+}
+
+// releasesBase is the API root; a var so tests can point it at a local server.
+var releasesBase = "https://api.github.com/repos/" + Repo
+
+func releasesURL() string { return releasesBase + "/releases/latest" }
+
+// rawBase is the raw.githubusercontent root for the CHANGELOG read.
+var rawBase = "https://raw.githubusercontent.com/" + Repo + "/main"
+
+// Tuning for flaky consumer networks. GitHub is routinely slow, throttled or
+// intermittently unreachable from some regions: a single 10-second shot used
+// to fail the whole update even though a retry seconds later succeeded, and
+// the 3-minute download cap killed large binaries on a slow link.
+const (
+	checkAttempts   = 3
+	checkTimeout    = 20 * time.Second
+	retryBackoff    = 2 * time.Second
+	downloadTimeout = 10 * time.Minute
+)
+
+// fetchWithRetry performs a GET, retrying transient failures (timeouts,
+// connection resets, 5xx) with a growing backoff, and returns the response
+// body. The body is fully read inside each attempt so the attempt context is
+// always cancelled — no context leak on the success path.
+func fetchWithRetry(ctx context.Context, url, accept string, attempts int) (int, []byte, error) {
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if attempt > 1 {
+			select {
+			case <-ctx.Done():
+				return 0, nil, ctx.Err()
+			case <-time.After(time.Duration(attempt-1) * retryBackoff):
+			}
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, checkTimeout)
+		req, err := http.NewRequestWithContext(attemptCtx, http.MethodGet, url, nil)
+		if err != nil {
+			cancel()
+			return 0, nil, err
+		}
+		req.Header.Set("User-Agent", "mihani-code-updater")
+		if accept != "" {
+			req.Header.Set("Accept", accept)
+		}
+		client := &http.Client{Timeout: checkTimeout}
+		resp, err := client.Do(req)
+		if err == nil && resp.StatusCode < 500 {
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			resp.Body.Close()
+			cancel()
+			if readErr != nil {
+				lastErr = readErr
+				continue
+			}
+			return resp.StatusCode, body, nil
+		}
+		if err == nil {
+			lastErr = fmt.Errorf("github returned %s", resp.Status)
+			resp.Body.Close()
+		} else {
+			lastErr = err
+		}
+		cancel()
+	}
+	return 0, nil, lastErr
+}
+
+// unreachableError describes a failed GitHub round trip in plain language and
+// points at the manual installer, which uses a different fetch path and often
+// succeeds when the app's own request does not.
+func unreachableError(what string, err error) error {
+	reason := "could not reach GitHub"
+	lower := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(lower, "timeout"), strings.Contains(lower, "deadline exceeded"),
+		strings.Contains(lower, "timed out"):
+		reason = "timed out reaching GitHub"
+	}
+	return fmt.Errorf("%s (%s) after %d attempts — this network may block or throttle GitHub · install the same version manually: %s",
+		reason, what, checkAttempts, ManualInstallHint())
+}
 
 // Release is the subset of a GitHub release the UI needs.
 type Release struct {
@@ -47,28 +136,22 @@ type ghRelease struct {
 	} `json:"assets"`
 }
 
-// Latest fetches the newest published release for Repo.
+// Latest fetches the newest published release for Repo. Transient network
+// failures are retried, and an exhausted retry reports the manual installer
+// instead of a raw timeout.
 func Latest(ctx context.Context) (*Release, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releasesURL, nil)
+	status, body, err := fetchWithRetry(ctx, releasesURL(), "application/vnd.github+json", checkAttempts)
 	if err != nil {
-		return nil, err
+		return nil, unreachableError("update check", err)
 	}
-	req.Header.Set("User-Agent", "mihani-code-updater")
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
 	switch {
-	case resp.StatusCode == http.StatusNotFound:
+	case status == http.StatusNotFound:
 		return nil, fmt.Errorf("no published release found for %s", Repo)
-	case resp.StatusCode != http.StatusOK:
-		return nil, fmt.Errorf("github returned %d while checking for updates", resp.StatusCode)
+	case status != http.StatusOK:
+		return nil, fmt.Errorf("github returned %d while checking for updates", status)
 	}
 	var raw ghRelease
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&raw); err != nil {
+	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, err
 	}
 	r := &Release{Tag: raw.TagName, Name: raw.Name, Body: raw.Body, URL: raw.HTMLURL}
@@ -182,26 +265,14 @@ func OpenURL(u string) error {
 // "what's new" lives in the CHANGELOG. It returns the section for tag, or the
 // newest section if tag is not found, or ("", nil) when nothing is usable.
 func Changelog(ctx context.Context, tag string) (string, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	url := "https://raw.githubusercontent.com/" + Repo + "/main/CHANGELOG.md"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	status, body, err := fetchWithRetry(ctx, rawBase+"/CHANGELOG.md", "", checkAttempts)
 	if err != nil {
-		return "", err
+		return "", unreachableError("changelog fetch", err)
 	}
-	req.Header.Set("User-Agent", "mihani-code-updater")
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
+	if status != http.StatusOK {
+		return "", fmt.Errorf("github changelog returned %d", status)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("github changelog returned %d", resp.StatusCode)
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return "", err
-	}
-	return changelogSection(string(raw), tag), nil
+	return changelogSection(string(body), tag), nil
 }
 
 // changelogSection extracts "## <tag>" up to the next "## " header; if tag is
@@ -269,44 +340,69 @@ func Apply(ctx context.Context, r *Release) (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("could not locate the running binary: %w", err)
 	}
+	// The release host (objects.githubusercontent.com) is frequently slow or
+	// throttled on consumer networks; a 3-minute cap killed large binaries
+	// mid-download. Give it room, and retry once from scratch before giving
+	// up with an actionable message.
 	dir := filepath.Dir(exe)
 	tmp := filepath.Join(dir, filepath.Base(exe)+".update.tmp")
+	client := &http.Client{Timeout: downloadTimeout}
 
-	client := &http.Client{Timeout: 3 * time.Minute}
+	var lastErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		err := downloadTo(ctx, client, dlURL, tmp)
+		if err == nil {
+			// Do NOT delete tmp: on Windows the swap happens only after this
+			// process exits (a running .exe is locked), so the helper still
+			// needs tmp. swapBinary consumes it.
+			return swapBinary(exe, tmp, r.Tag)
+		}
+		lastErr = err
+		os.Remove(tmp)
+		if ctx.Err() != nil {
+			return "", false, ctx.Err()
+		}
+	}
+	return "", false, fmt.Errorf("%w · the release host did not respond — install manually: %s", lastErr, ManualInstallHint())
+}
+
+// downloadTo streams the release binary to tmp and only reports success once
+// the whole body arrived. ctx lets the user cancel with esc.
+func downloadTo(ctx context.Context, client *http.Client, dlURL, tmp string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dlURL, nil)
 	if err != nil {
-		return "", false, err
+		return err
 	}
 	req.Header.Set("User-Agent", "mihani-code-updater")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", false, fmt.Errorf("download failed: %w", err)
+		lower := strings.ToLower(err.Error())
+		if os.IsTimeout(err) || strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline") {
+			return fmt.Errorf("the download timed out after %v (GitHub's release host is slow or blocked on this network)", client.Timeout)
+		}
+		return fmt.Errorf("download failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", false, fmt.Errorf("download failed: github %d", resp.StatusCode)
+		return fmt.Errorf("download failed: github %d", resp.StatusCode)
 	}
 	f, err := os.Create(tmp)
 	if err != nil {
-		return "", false, fmt.Errorf("could not write the new binary: %w", err)
+		return fmt.Errorf("could not write the new binary: %w", err)
 	}
 	n, err := io.Copy(f, io.LimitReader(resp.Body, 300<<20))
 	closeErr := f.Close()
 	if err != nil {
 		os.Remove(tmp)
-		return "", false, fmt.Errorf("download interrupted: %w", err)
+		return fmt.Errorf("download interrupted after %d bytes: %w", n, err)
 	}
 	if closeErr != nil {
 		os.Remove(tmp)
-		return "", false, fmt.Errorf("could not finish writing the new binary: %w", closeErr)
+		return fmt.Errorf("could not finish writing the new binary: %w", closeErr)
 	}
 	if n < 4096 {
 		os.Remove(tmp)
-		return "", false, fmt.Errorf("downloaded file is only %d bytes — not a valid binary", n)
+		return fmt.Errorf("downloaded file is only %d bytes — not a valid binary", n)
 	}
-	// Do NOT delete tmp here: on Windows the swap happens only after this
-	// process exits (a running .exe is locked), so the helper still needs tmp.
-	// swapBinary consumes tmp (renames it on Unix, the helper moves it on
-	// Windows, and it is removed on failure).
-	return swapBinary(exe, tmp, r.Tag)
+	return nil
 }

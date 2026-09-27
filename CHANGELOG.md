@@ -2,6 +2,11 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.4.3
+
+### Fixed
+- **`/update` gave up with "connection timed out" on slow or flaky networks.** The release check now retries transient failures (3 attempts with backoff) instead of a single 10-second shot, the download cap went from 3 to 10 minutes with one automatic retry, and when GitHub is still unreachable the error spells out what happened and hands over the exact manual-install command instead of a bare timeout.
+
 ## v0.4.2
 
 ### Fixed
