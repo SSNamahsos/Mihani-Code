@@ -2,6 +2,11 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.4.2
+
+### Fixed
+- **`/connect` failed on a pasted base URL** with `net/url: invalid control character in URL`. The classic Windows console delivers a clipboard paste with a leading NUL byte, so the URL arrived as `\x00https://…`. Typed and pasted values in `/connect` and the API-key editor are now sanitized (control characters stripped), and an invalid base URL gets a plain-language message instead of a raw Go parse error. Pastes into the composer get the same treatment so no stray byte reaches the model.
+
 ## v0.4.1
 
 ### Fixed

@@ -829,7 +829,7 @@ func (m *Model) updateKeyEditor(key tea.KeyMsg) tea.Cmd {
 		m.closeKeyEditor()
 		return nil
 	case "enter":
-		value := strings.TrimSpace(m.connectInput.Value())
+		value := sanitizeField(m.connectInput.Value())
 		label := m.keyEditTarget
 		p := m.cfg.Providers[label]
 		p.PersonalKey = value

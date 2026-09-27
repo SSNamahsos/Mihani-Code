@@ -24,6 +24,39 @@ var connectPlaceholders = [3]string{
 
 var connectLabels = [3]string{"Provider ID", "Base URL", "API key"}
 
+// sanitizeField cleans a value typed (or pasted) into a single-line field.
+// The classic Windows console delivers a clipboard paste with a leading NUL
+// byte, so the pasted base URL arrived as "\x00https://…" and net/url rejected
+// it with `invalid control character in URL` — dead-ending /connect. Strip
+// every control character (line breaks and tabs included, this is one line)
+// and trim spaces, so whatever the terminal hands over cannot corrupt it.
+func sanitizeField(s string) string {
+	return strings.TrimSpace(stripControls(s, true))
+}
+
+// stripControls removes control characters that never belong in typed text.
+// With strictLines (single-line fields) it also removes \n, \r and \t;
+// otherwise newlines and tabs are preserved so multi-line pastes into the
+// composer keep their shape.
+func stripControls(s string, strictLines bool) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r == '\n' || r == '\t' {
+			if strictLines {
+				continue
+			}
+			b.WriteRune(r)
+			continue
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 func (m *Model) openConnect() {
 	m.closeOverlay()
 	m.connectOpen = true
@@ -81,7 +114,11 @@ func (m *Model) updateConnectKey(key tea.KeyMsg) tea.Cmd {
 }
 
 func (m *Model) saveConnectField() {
-	m.connectFields[m.connectField] = strings.TrimSpace(m.connectInput.Value())
+	// Sanitize here, not only at submit: the raw textarea keeps whatever the
+	// terminal delivered (NUL-prefixed conhost paste), so the value shown for
+	// other fields and reloaded on tab-back would still be poisoned.
+	m.connectFields[m.connectField] = sanitizeField(m.connectInput.Value())
+	m.connectInput.SetValue(m.connectFields[m.connectField])
 }
 
 func (m *Model) loadConnectField() {
@@ -94,15 +131,32 @@ func (m *Model) loadConnectField() {
 
 // startConnect validates the form and discovers models from the endpoint.
 func (m *Model) startConnect() tea.Cmd {
-	name := m.connectFields[0]
-	base := m.connectFields[1]
-	key := m.connectFields[2]
-	switch {
-	case name == "":
-		m.connectError = "a provider id is required"
+	name := sanitizeField(m.connectFields[0])
+	base := sanitizeField(m.connectFields[1])
+	key := sanitizeField(m.connectFields[2])
+	if base == "" {
+		m.connectError = "enter the provider base URL (e.g. https://api.example.com/v1)"
 		return nil
-	case base == "" || !strings.Contains(base, "://"):
-		m.connectError = "enter a valid http(s) base URL"
+	}
+	// Validate with net/url so a malformed value gets a plain-language message
+	// instead of a raw parse error leaking "net/url: invalid control
+	// character in URL" or "first path segment in URL cannot contain colon"
+	// from the HTTP layer.
+	parsed, err := url.Parse(base)
+	if err != nil {
+		m.connectError = fmt.Sprintf("that is not a valid base URL: %v", err)
+		return nil
+	}
+	switch {
+	case parsed.Scheme != "http" && parsed.Scheme != "https":
+		m.connectError = "the base URL must start with http:// or https://"
+		return nil
+	case parsed.Host == "":
+		m.connectError = "the base URL needs a host, e.g. https://api.example.com/v1"
+		return nil
+	}
+	if name == "" {
+		m.connectError = "a provider id is required"
 		return nil
 	}
 	m.connectName = name

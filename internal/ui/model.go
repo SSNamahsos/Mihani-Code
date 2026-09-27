@@ -771,9 +771,16 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	if x.Paste && len(x.Runes) > 0 &&
 		m.overlay == "" && !m.connectOpen && !m.keyEditOpen && !m.updateOpen &&
 		m.pendingApproval == nil && m.pendingAsk == nil && !m.focusActive {
-		m.input.InsertString(string(x.Runes))
+		// Drop stray control characters: the classic Windows console
+		// delivers a paste with a leading NUL, which would otherwise travel
+		// to the model inside the prompt.
+		pasted := strings.TrimRight(stripControls(string(x.Runes), false), "\n")
+		if pasted == "" {
+			return m, nil, true
+		}
+		m.input.InsertString(pasted)
 		m.resizeComposer()
-		if lines := strings.Count(string(x.Runes), "\n") + 1; lines > 1 {
+		if lines := strings.Count(pasted, "\n") + 1; lines > 1 {
 			m.notify(fmt.Sprintf("pasted %d lines — enter sends the whole thing", lines))
 		}
 		return m, nil, true
@@ -1034,7 +1041,10 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			m.lastSubmitAt = time.Now()
 		}
 		m.input.Reset()
-		return m, m.submit(value), true
+		// A raw (non-bracketed) paste on the classic Windows console can
+		// carry a leading NUL into the textarea; never let it reach the
+		// model inside the prompt.
+		return m, m.submit(stripControls(value, false)), true
 	}
 	return m, nil, false
 }
