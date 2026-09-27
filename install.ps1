@@ -24,7 +24,21 @@ try {
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest"
     $asset = $release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
     if (-not $asset) { throw "asset $assetName not found in release $($release.tag_name)" }
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $target -UseBasicParsing
+    $tmp = Join-Path $env:TEMP ("mihani-install-" + [guid]::NewGuid().ToString() + ".exe")
+    try {
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmp -UseBasicParsing
+        # A dropped connection leaves a TRUNCATED file whose PE header still
+        # looks valid, so Windows refuses it later with "not a valid
+        # application for this OS platform". Verify the size before installing.
+        $got = (Get-Item $tmp).Length
+        if ($asset.size -gt 0 -and $got -ne $asset.size) {
+            throw "incomplete download: got $got of $($asset.size) bytes"
+        }
+        if ($got -lt 1000000) { throw "downloaded file is only $got bytes - not a real binary" }
+        Move-Item $tmp $target -Force
+    } finally {
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    }
     Write-Host "Installed $($release.tag_name) -> $target"
 } catch {
     Write-Host "Release download unavailable: $($_.Exception.Message)"

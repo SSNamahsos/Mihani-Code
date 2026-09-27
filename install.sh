@@ -37,8 +37,24 @@ download() {
 echo "Installing Mihani Code..."
 if TAG_JSON="$(download "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null)" &&
    URL="$(printf '%s' "$TAG_JSON" | grep -o "\"browser_download_url\": *\"[^\"]*/$ASSET\"" | head -n 1 | sed 's/.*"\(https[^"]*\)"/\1/')" &&
+   EXPECTED="$(printf '%s' "$TAG_JSON" | tr ',' '\n' | grep -A 3 "\"name\": *\"$ASSET\"" | grep -o '"size": *[0-9]*' | head -n 1 | grep -o '[0-9]*')" &&
    [ -n "$URL" ]; then
-  download "$URL" > "$DEST/mihani.tmp" && mv "$DEST/mihani.tmp" "$DEST/mihani"
+  download "$URL" > "$DEST/mihani.tmp" || true
+  GOT="$(wc -c < "$DEST/mihani.tmp" | tr -d ' ')"
+  # A dropped connection leaves a TRUNCATED binary that still looks runnable
+  # but fails at execution time, so verify the published size before moving it
+  # into place. Fall back to go install rather than install a broken file.
+  if [ -n "${EXPECTED:-}" ] && [ "$GOT" != "$EXPECTED" ]; then
+    rm -f "$DEST/mihani.tmp"
+    echo "Incomplete download: got $GOT of $EXPECTED bytes — retrying via source build..." >&2
+    go install "github.com/$REPO/cmd/mihani@latest"
+  elif [ "$GOT" -lt 1000000 ]; then
+    rm -f "$DEST/mihani.tmp"
+    echo "Downloaded file is only $GOT bytes — retrying via source build..." >&2
+    go install "github.com/$REPO/cmd/mihani@latest"
+  else
+    mv "$DEST/mihani.tmp" "$DEST/mihani"
+  fi
 else
   echo "Release download unavailable — falling back to go install (requires Go 1.24+)..."
   go install "github.com/$REPO/cmd/mihani@latest"

@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -97,5 +99,65 @@ func TestFetchWithRetryGivesUpAfterAttempts(t *testing.T) {
 	// Backoff between two attempts must be bounded and short.
 	if time.Since(start) > 20*time.Second {
 		t.Fatalf("retries took too long: %v", time.Since(start))
+	}
+}
+
+// Field report: a download cut short by a dropped connection keeps its PE
+// header, so it passed the "is it a real binary?" check and was installed —
+// Windows then refused it with "not a valid application for this OS platform".
+// The published asset size must be enforced before the swap.
+func TestDownloadRejectsTruncatedBinary(t *testing.T) {
+	full := make([]byte, 200000)
+	for i := range full {
+		full[i] = byte(i % 251)
+	}
+	// The real-world truncation: a proxy/CDN cut the transfer but the client
+	// still received a clean, complete HTTP body — just fewer bytes than the
+	// release advertises.
+	partial := make([]byte, 120000)
+	copy(partial, full[:120000])
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(partial)
+	}))
+	defer srv.Close()
+
+	tmp := filepath.Join(t.TempDir(), "mihani.exe")
+	err := downloadTo(context.Background(), &http.Client{Timeout: 30 * time.Second}, srv.URL, tmp, int64(len(full)))
+	if err == nil {
+		t.Fatal("a truncated download must be rejected")
+	}
+	if !strings.Contains(err.Error(), "incomplete download") {
+		t.Fatalf("error should name the truncation, got: %v", err)
+	}
+	if _, statErr := os.Stat(tmp); statErr == nil {
+		t.Fatal("the truncated file must be deleted, not left for the swap")
+	}
+}
+
+// A complete download of the expected size passes.
+func TestDownloadAcceptsCompleteBinary(t *testing.T) {
+	full := make([]byte, 100000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(full)
+	}))
+	defer srv.Close()
+
+	tmp := filepath.Join(t.TempDir(), "mihani.exe")
+	if err := downloadTo(context.Background(), &http.Client{Timeout: 30 * time.Second}, srv.URL, tmp, int64(len(full))); err != nil {
+		t.Fatalf("complete download rejected: %v", err)
+	}
+	got, err := os.Stat(tmp)
+	if err != nil || got.Size() != int64(len(full)) {
+		t.Fatalf("file not written correctly: %v", err)
+	}
+}
+
+func TestAssetSizeLookup(t *testing.T) {
+	rel := &Release{AssetSizes: map[string]int64{AssetName(): 19194880}}
+	if got := AssetSize(rel); got != 19194880 {
+		t.Fatalf("AssetSize = %d", got)
+	}
+	if got := AssetSize(&Release{}); got != 0 {
+		t.Fatalf("missing sizes should mean 0 (no check), got %d", got)
 	}
 }

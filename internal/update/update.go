@@ -123,6 +123,10 @@ type Release struct {
 	Body   string   // release notes / changelog body
 	URL    string   // human release page on GitHub
 	Assets []string // browser_download_url list
+	// AssetSizes maps an asset's file name to its published size, so a
+	// download cut short by a dropped connection can be detected instead of
+	// installing a truncated binary that Windows then refuses to run.
+	AssetSizes map[string]int64
 }
 
 type ghRelease struct {
@@ -133,6 +137,7 @@ type ghRelease struct {
 	Assets  []struct {
 		Name string `json:"name"`
 		URL  string `json:"browser_download_url"`
+		Size int64  `json:"size"`
 	} `json:"assets"`
 }
 
@@ -154,10 +159,13 @@ func Latest(ctx context.Context) (*Release, error) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, err
 	}
-	r := &Release{Tag: raw.TagName, Name: raw.Name, Body: raw.Body, URL: raw.HTMLURL}
+	r := &Release{Tag: raw.TagName, Name: raw.Name, Body: raw.Body, URL: raw.HTMLURL, AssetSizes: map[string]int64{}}
 	for _, a := range raw.Assets {
 		if a.URL != "" {
 			r.Assets = append(r.Assets, a.URL)
+		}
+		if a.Name != "" && a.Size > 0 {
+			r.AssetSizes[a.Name] = a.Size
 		}
 	}
 	if r.Tag == "" {
@@ -350,7 +358,7 @@ func Apply(ctx context.Context, r *Release) (string, bool, error) {
 
 	var lastErr error
 	for attempt := 1; attempt <= 2; attempt++ {
-		err := downloadTo(ctx, client, dlURL, tmp)
+		err := downloadTo(ctx, client, dlURL, tmp, AssetSize(r))
 		if err == nil {
 			// Do NOT delete tmp: on Windows the swap happens only after this
 			// process exits (a running .exe is locked), so the helper still
@@ -366,9 +374,29 @@ func Apply(ctx context.Context, r *Release) (string, bool, error) {
 	return "", false, fmt.Errorf("%w · the release host did not respond — install manually: %s", lastErr, ManualInstallHint())
 }
 
+// AssetSize returns the published size of this platform's binary, or 0 when
+// the release does not advertise one.
+func AssetSize(r *Release) int64 {
+	if r == nil || len(r.AssetSizes) == 0 {
+		return 0
+	}
+	return r.AssetSizes[AssetName()]
+}
+
+// AssetName is the release asset file name for the running platform.
+func AssetName() string {
+	base := "mihani-" + runtime.GOOS + "-" + runtime.GOARCH
+	if runtime.GOOS == "windows" {
+		base += ".exe"
+	}
+	return base
+}
+
 // downloadTo streams the release binary to tmp and only reports success once
-// the whole body arrived. ctx lets the user cancel with esc.
-func downloadTo(ctx context.Context, client *http.Client, dlURL, tmp string) error {
+// the whole body arrived. ctx lets the user cancel with esc. wantSize, when
+// positive, is the published asset size: a short read is a truncated binary
+// (valid PE header, unusable file) and must never reach the swap.
+func downloadTo(ctx context.Context, client *http.Client, dlURL, tmp string, wantSize int64) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dlURL, nil)
 	if err != nil {
 		return err
@@ -403,6 +431,14 @@ func downloadTo(ctx context.Context, client *http.Client, dlURL, tmp string) err
 	if n < 4096 {
 		os.Remove(tmp)
 		return fmt.Errorf("downloaded file is only %d bytes — not a valid binary", n)
+	}
+	// The decisive check for a dropped connection: the file still looks like a
+	// valid PE even when cut short, and Windows then refuses it with "not a
+	// valid application for this OS platform". Compare against the published
+	// asset size before the swap ever happens.
+	if wantSize > 0 && n != wantSize {
+		os.Remove(tmp)
+		return fmt.Errorf("incomplete download: got %d of %d bytes — the connection dropped mid-transfer", n, wantSize)
 	}
 	return nil
 }
