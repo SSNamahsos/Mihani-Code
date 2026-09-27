@@ -229,6 +229,7 @@ type Model struct {
 	// as an Enter key. A burst of runes immediately before an Enter on a
 	// multiline composer is treated as a literal newline, not a submit.
 	lastKeyAt    time.Time
+	burstStart   time.Time // first rune of the current burst (rate window)
 	burstRunes   int
 	lastSubmitAt time.Time // set when a submit happened while a burst was active
 
@@ -792,10 +793,15 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	}
 
-	// Track the rune burst for the raw-paste Enter guard (below).
+	// Track the rune burst for the raw-paste Enter guard (below). The counter
+	// is a RATE measure, not a running total: it resets whenever the burst
+	// window lapses. Without that reset, 40+ characters typed continuously
+	// accumulated and Enter started inserting newlines instead of sending —
+	// the guard has to see paste SPEED, never a lifetime character count.
 	if x.Type == tea.KeyRunes {
 		now := time.Now()
-		if now.Sub(m.lastKeyAt) > pasteBurstWindow {
+		if m.burstStart.IsZero() || now.Sub(m.burstStart) > pasteBurstWindow {
+			m.burstStart = now
 			m.burstRunes = 0
 		}
 		m.burstRunes += len(x.Runes)
@@ -994,9 +1000,28 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			return m, nil, true
 		case "enter":
 			if len(items) > 0 {
+				// A fully-typed command runs on the first Enter — waiting for
+				// a second one to "confirm" the insert was a usability trap
+				// (every command looked like it ignored the keypress). Only a
+				// partial/ambiguous prefix falls back to inserting the
+				// highlighted match so the user can finish it.
 				if m.commandIndex >= len(items) {
 					// Typing narrowed the list under a stale highlight.
 					m.commandIndex = 0
+				}
+				typed := strings.TrimSpace(m.input.Value())
+				exact := -1
+				for i, it := range items {
+					if it.name == typed {
+						exact = i
+						break
+					}
+				}
+				if exact >= 0 {
+					// It is an exact command: run it now.
+					m.input.Reset()
+					m.commandIndex = 0
+					return m, m.submit(items[exact].name), true
 				}
 				m.input.SetValue(items[m.commandIndex].name + " ")
 				m.commandIndex = 0
@@ -1032,6 +1057,9 @@ func (m *Model) handleKey(x tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			// submitted whatever had accumulated so far).
 			m.burstRunes++
 			m.lastKeyAt = time.Now()
+			if m.burstStart.IsZero() || m.lastKeyAt.Sub(m.burstStart) > pasteBurstWindow {
+				m.burstStart = m.lastKeyAt
+			}
 			return m, nil, true
 		}
 		if m.busy {

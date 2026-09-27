@@ -106,8 +106,68 @@ func TestRawPasteBlankLineKeepsGuardAlive(t *testing.T) {
 	}
 }
 
-// A short line right after a burst-active submit rides the same paste: its
-// Enter joins the text instead of sending it as yet another fragment.
+// Regression: the burst counter was a lifetime total, so after ~40 characters
+// typed continuously, Enter inserted newlines instead of sending — and kept
+// doing so, because only runes refreshed the clock. The counter must measure
+// paste SPEED: a long human-typed line has to still send on the first Enter.
+func TestLongTypedLineStillSendsOnEnter(t *testing.T) {
+	m := newTestModel(80, 24)
+	// Simulate 120 characters typed at a brisk human pace: bursts of ~4 runes
+	// every 300ms, with the guard's window never exceeded by more than a few.
+	now := time.Now()
+	for i := 0; i < 30; i++ {
+		m.burstStart = now
+		m.burstRunes = 4
+		m.lastKeyAt = now
+		now = now.Add(300 * time.Millisecond)
+	}
+	m.input.SetValue("a long prompt the user typed themselves over many seconds of continuous typing")
+	// A real gap since the last keystroke, as if they just finished.
+	m.lastKeyAt = time.Now()
+	m.burstStart = time.Now()
+	m.burstRunes = 4
+
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.busy {
+		t.Fatal("enter after continuous typing must send, not insert a newline")
+	}
+	if strings.HasSuffix(m.input.Value(), "\n") {
+		t.Fatalf("composer should have been sent and cleared, got %q", m.input.Value())
+	}
+}
+
+// The mirror case: slow typing into a MULTILINE composer still sends, so the
+// guard cannot turn "build a prompt over a few lines" into an un-sendable
+// message.
+func TestSlowlyTypedMultilineStillSendsOnEnter(t *testing.T) {
+	m := newTestModel(80, 24)
+	m.input.SetValue("first line\nsecond line")
+	m.burstStart = time.Now()
+	m.burstRunes = 3 // a few runes, human pace
+	m.lastKeyAt = time.Now()
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.busy {
+		t.Fatal("enter on a typed multiline prompt must send")
+	}
+}
+
+// A genuine paste is still protected: thousands of runes inside the window
+// must convert Enter into a newline (the original 5 KB report).
+func TestMachineSpeedBurstStillCountsAsPaste(t *testing.T) {
+	m := newTestModel(80, 24)
+	m.input.SetValue(strings.Repeat("pasted line of the big block\n", 20))
+	now := time.Now()
+	m.burstStart = now
+	m.burstRunes = 4200 // 5 KB in milliseconds — a real paste
+	m.lastKeyAt = now
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.busy {
+		t.Fatal("a machine-speed burst must not submit mid-paste")
+	}
+	if !strings.HasSuffix(m.input.Value(), "\n") {
+		t.Fatalf("paste enter should append a newline, got %q", m.input.Value()[:40])
+	}
+}
 func TestRawPasteShortLineAfterSubmitKeepsRiding(t *testing.T) {
 	m := newTestModel(80, 24)
 	m.input.SetValue("next")

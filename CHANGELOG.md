@@ -2,6 +2,15 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.4.5
+
+### Fixed
+- **Enter stopped sending long messages.** The anti-fragmentation paste guard measured typing by *total* characters instead of speed, so after ~40 characters of continuous typing, Enter inserted newlines instead of sending — and kept doing so. The guard now measures burst *rate*, so long hand-typed prompts (single or multi-line) always send on the first Enter, while a genuine paste is still protected.
+- **Typed commands needed Enter twice.** A fully-typed command like `/clear` only inserted its name on the first Enter; it ran on the second, so every command looked like it ignored the keypress. Exact matches now run immediately; partial prefixes still complete as before.
+
+### Added
+- **Automated UI test suite** — a headless harness that drives the real program with real keystrokes: every slash command, every key binding, mouse press/drag/wheel, modals, the command palette, a full agent turn with a tool call against a live fake server, a failing provider, and a 400-keystroke input storm. It fails on any panic, hang, blank screen, or dead-end, so this class of bug cannot come back unnoticed.
+
 ## v0.4.4
 
 ### Fixed
