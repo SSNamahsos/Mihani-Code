@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,47 @@ import (
 // message action menu instead.
 
 type selPos struct{ row, col int }
+
+// Mouse reporting is a pair of terminal control sequences, and the halves only
+// work together:
+//
+//   - 1002 (button-event tracking) makes the terminal report presses, releases,
+//     the wheel, and motion while a button is held — what drag selection needs.
+//   - 1006 (SGR encoding) makes those reports plain ASCII: "ESC [ < b ; x ; y M".
+//     Without it the terminal falls back to the legacy X10 encoding, "ESC [ M"
+//     followed by three raw bytes that are each a coordinate offset by 32.
+//     Those bytes are printable, and "ESC [ M" on its own is a complete (if
+//     meaningless) CSI sequence, so a report that arrives split across two reads
+//     — routine on a console — is mis-parsed: the header is swallowed as a
+//     stray sequence and the three payload bytes reach the composer as typed
+//     characters. That is the reported "####@@!" typed into the chat box.
+//
+// tea.Program.EnableMouseCellMotion writes only 1002; the startup path
+// (tea.WithMouseCellMotion) writes both. Toggling capture on at runtime through
+// that helper is what used to leave the terminal reporting in X10 mode, so
+// this app writes both halves itself.
+const (
+	mouseModeOn  = "\x1b[?1002h\x1b[?1006h"
+	mouseModeOff = "\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l"
+)
+
+// setMouseMode switches the terminal's mouse reporting on or off, handing the
+// terminal's own text selection back when it goes off.
+//
+// The sequence goes out in one write. A terminal parses DECSET in stream order,
+// but splitting the write would let a renderer frame land in the middle of it.
+// tea.Printf is not an option: bubbletea discards it while the alternate screen
+// is active, and this app always runs in one.
+func (m *Model) setMouseMode(on bool) {
+	seq := mouseModeOff
+	if on {
+		seq = mouseModeOn
+	}
+	if m.out == nil {
+		return
+	}
+	_, _ = io.WriteString(m.out, seq)
+}
 
 // mouseDebugLog appends raw mouse traffic to %TEMP%\mihani-mouse.log while
 // MIHANI_DEBUG is set — isolates terminal input issues in the field.
@@ -88,6 +130,7 @@ func (m *Model) mouseMove(x tea.MouseMsg) {
 		r = len(m.renderedLines) - 1
 	}
 	p := selPos{row: r, col: x.X}
+	prev := m.selH
 	m.selH = p
 	// Jitter dead zone: terminals (notably Windows Terminal) deliver spurious
 	// ±1 cell motion events on plain clicks, which used to turn a click into
@@ -113,24 +156,42 @@ func (m *Model) mouseMove(x tea.MouseMsg) {
 	const edge = 2
 	top := 1 // transcript starts under the header row
 	bottom := top + m.view.Height - 1
+	offset := m.view.YOffset
 	switch {
 	case x.Y <= top+edge:
 		m.scrollUp(2)
-		m.extendSelection(-2)
+		m.moveSelectionHead(-2)
 	case x.Y >= bottom-edge:
 		m.scrollDown(2)
-		m.extendSelection(2)
+		m.moveSelectionHead(2)
 	}
-	// Repaint so the highlight follows the pointer immediately instead of
-	// waiting for the next unrelated refresh.
-	m.refreshView()
+	// Repaint only when something the user can see actually changed.
+	// Button-event tracking (1002) streams a motion message for every cell the
+	// pointer crosses, and refreshView re-renders every block in the transcript,
+	// so repainting unconditionally queued hundreds of full re-renders for a
+	// single drag and locked the UI up. Pointer jitter before the drag threshold
+	// is crossed changes nothing on screen either, so it skips the repaint too.
+	if m.view.YOffset != offset || (m.selDrag && p != prev) {
+		m.refreshView()
+	}
 }
 
 // extendSelection moves the drag head when the transcript scrolls during an
-// active selection. The anchor is content-anchored already; the head follows
-// the content so a wheel scroll mid-drag grows the selection into whatever
-// the scroll revealed. No-op when nothing is being selected.
+// active selection, then repaints. The anchor is content-anchored already; the
+// head follows the content so a wheel scroll mid-drag grows the selection into
+// whatever the scroll revealed. No-op when nothing is being selected.
 func (m *Model) extendSelection(delta int) {
+	if !m.selOn {
+		return
+	}
+	m.moveSelectionHead(delta)
+	m.refreshView()
+}
+
+// moveSelectionHead shifts the drag head to follow the content the viewport
+// just scrolled to, keeping it inside the transcript. No-op when nothing is
+// being selected.
+func (m *Model) moveSelectionHead(delta int) {
 	if !m.selOn {
 		return
 	}
@@ -141,7 +202,6 @@ func (m *Model) extendSelection(delta int) {
 	if m.selH.row >= len(m.renderedLines) {
 		m.selH.row = len(m.renderedLines) - 1
 	}
-	m.refreshView()
 }
 
 func (m *Model) mouseRelease(x tea.MouseMsg) {

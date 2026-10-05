@@ -98,6 +98,15 @@ func newE2E(t *testing.T, width, height int) *e2eDriver {
 // final answer) runs through the production code path.
 func newE2EWithServer(t *testing.T, width, height int, handler http.HandlerFunc) (*e2eDriver, *httptest.Server) {
 	t.Helper()
+	return newE2EWithServerOutput(t, width, height, io.Discard, false, handler)
+}
+
+// newE2EWithServerOutput is newE2EWithServer with a caller-supplied output sink,
+// so a test can inspect the raw control sequences the program asked the terminal
+// to switch on (mouse reporting, alternate screen, ...). That requires the real
+// renderer: WithoutRenderer swaps in a nil renderer that swallows them all.
+func newE2EWithServerOutput(t *testing.T, width, height int, out io.Writer, render bool, handler http.HandlerFunc) (*e2eDriver, *httptest.Server) {
+	t.Helper()
 	isolatedUsageHome(t)
 	srv := httptest.NewServer(handler)
 	m := smokeModel(t, width, height)
@@ -116,14 +125,17 @@ func newE2EWithServer(t *testing.T, width, height int, handler http.HandlerFunc)
 		d.last = frame
 		d.mu.Unlock()
 	}
-	p := tea.NewProgram(capturingModel{Model: m, sink: d.sink},
-		tea.WithInput(pr), tea.WithOutput(io.Discard),
+	opts := []tea.ProgramOption{
+		tea.WithInput(pr), tea.WithOutput(out),
 		// Render into the model: a pipe has no window size, so the standard
 		// renderer would emit clipped frames and the assertions would measure
 		// truncation instead of app behavior.
-		tea.WithoutRenderer(),
 		tea.WithoutCatchPanics(), // a panic must fail the test, not be swallowed
-	)
+	}
+	if !render {
+		opts = append(opts, tea.WithoutRenderer())
+	}
+	p := tea.NewProgram(capturingModel{Model: m, sink: d.sink}, opts...)
 	go func() {
 		defer close(d.done)
 		_, _ = p.Run()
@@ -133,6 +145,9 @@ func newE2EWithServer(t *testing.T, width, height int, handler http.HandlerFunc)
 	// this right after building the program, and the agent loop is dead
 	// without it, so the harness must do the same.
 	m.program = p
+	// Mouse capture writes its control sequences to the model's own output
+	// writer; point it at the sink the harness is inspecting.
+	m.out = out
 	d.send("\x1b[8;%d;%dt", height, width)
 	return d, srv
 }

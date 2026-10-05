@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -158,6 +159,10 @@ type Model struct {
 
 	cancel  context.CancelFunc
 	program *tea.Program
+	// out is the terminal the app draws on. Mouse capture has to write its
+	// control sequences to the same place (bubbletea keeps its output writer
+	// private), so it is held here rather than assumed to be os.Stdout.
+	out io.Writer
 
 	pendingApproval chan bool
 	approvalTool    string
@@ -288,6 +293,7 @@ func New(cfg config.Config, version, resumeID, initialPrompt string) (Model, err
 		input:           ta,
 		view:            viewport.New(0, 10),
 		connectInput:    connectInput,
+		out:             os.Stdout,
 		agent:           &agent.Agent{Cfg: cfg, Root: root},
 		activeAssistant: -1,
 		activeTool:      -1,
@@ -634,7 +640,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		mouseDebugLog(x, m)
 		if m.connectOpen || m.keyEditOpen || m.updateOpen || m.pendingApproval != nil || m.pendingAsk != nil {
-			break
+			// Modals own the screen: drop the mouse rather than breaking out
+			// of the switch, which hands the message to the composer below.
+			return m, nil
 		}
 		if m.overlay != "" {
 			// An open menu must not swallow the mouse: clicking an item row

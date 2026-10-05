@@ -561,13 +561,7 @@ func (m *Model) command(s string) tea.Cmd {
 		// the default stays OFF so selection always works.
 		next := !m.cfg.MouseEnabled()
 		m.cfg.UseMouse = &next
-		if m.program != nil {
-			if next {
-				m.program.EnableMouseCellMotion()
-			} else {
-				m.program.DisableMouseCellMotion()
-			}
-		}
+		m.setMouseMode(next)
 		if err := m.cfg.Save(); err != nil {
 			m.appendBlock(&block{kind: blockError, content: "could not save setting: " + err.Error()})
 			return nil
