@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// Regression: Mihani Pro now supports native OpenAI function
-// calling (verified against the gateway 2026-08-30). The old
-// native_tools:false made opus models answer in prose instead of using
-// tools ("I can't write files here").
 func TestMihaniProUsesNativeToolsByDefault(t *testing.T) {
 	p := defaults().Providers[BuiltinSecondary]
 	if !p.UseNativeTools() {

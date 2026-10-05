@@ -269,8 +269,6 @@ func TestKeyFallsBackToPersonalKey(t *testing.T) {
 	}
 }
 
-// Regression: a stale in-memory copy saving over the file must not delete
-// user-added providers and their keys (multi-instance data loss).
 func TestSavePreservesDiskProvidersMissingFromMemory(t *testing.T) {
 	isolatedHome(t)
 	disk := defaults()

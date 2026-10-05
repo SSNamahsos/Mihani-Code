@@ -26,8 +26,6 @@ func TestNormalizeBaseURL(t *testing.T) {
 	}
 }
 
-// Regression: users paste the bare domain in /connect; chat requests must
-// still hit the /v1 API path instead of the gateway's web app.
 func TestNormalizeProviderAddsV1ForBareDomain(t *testing.T) {
 	p := NormalizeProvider("seekai-like", "https://seekai.cc", "", []string{"m"})
 	if p.BaseURL != "https://seekai.cc/v1" {

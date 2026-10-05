@@ -43,9 +43,6 @@ func TestOpenAIStreamCompletesAndKeepsHistory(t *testing.T) {
 	}
 }
 
-// Regression: a base URL pasted without its /v1 suffix must still reach the
-// API path. Gateways answer the bare path with their web app, which used to
-// surface as a silent empty ("cancelled") reply.
 func TestOpenAIRequestNormalizesBaseURL(t *testing.T) {
 	var gotPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -210,7 +207,6 @@ func TestOpenAIRequestTruncatedToolCallFails(t *testing.T) {
 	}
 }
 
-// Regression: streamed parallel tool calls must be reassembled in index order.
 func TestOpenAIToolCallsPreserveStreamOrder(t *testing.T) {
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

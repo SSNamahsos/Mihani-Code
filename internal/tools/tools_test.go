@@ -29,7 +29,6 @@ func TestRunnerWritesWithinWorkspace(t *testing.T) {
 	}
 }
 
-// Regression: models send \n but Windows files use \r\n; edit_file must still match.
 func TestEditFileMatchesAcrossLineEndings(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "win.txt")

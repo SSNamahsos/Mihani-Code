@@ -45,9 +45,6 @@ func TestExtractToolCallsNone(t *testing.T) {
 	}
 }
 
-// Regression: a stream that cut off inside a tool_call block (opening tag
-// present, closing tag missing) must be reported as a parse error so the
-// turn gets a corrective hint — never a silent early end.
 func TestExtractToolCallsTruncatedBlockReported(t *testing.T) {
 	truncated := "Running it now.\n" + toolCallOpenTag + `{"name":"bash","arguments":{"command":"curl -s https://example.com?x=`
 	calls, err := extractToolCalls(truncated)

@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// Regression: the classic Windows console delivers a clipboard paste with a
-// leading NUL byte, so the base URL arrived as "\x00https://host/api/v1" and
-// /connect failed with `net/url: invalid control character in URL`.
 func TestConnectAcceptsNULPrefixedPastedURL(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

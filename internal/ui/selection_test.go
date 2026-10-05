@@ -6,9 +6,6 @@ import (
 	"testing"
 )
 
-// Regression: selection columns are display columns, not byte offsets.
-// Byte indexing used to garble every cut once the line contained multi-byte
-// runes (box-drawing card borders, CJK text).
 func TestPlainCutDisplayRespectsRuneWidths(t *testing.T) {
 	s := "│ héllo wörld │"
 	// cut at display column 2 (after "│ ")

@@ -53,8 +53,6 @@ func newTestModel(width, height int) Model {
 	}
 }
 
-// Regression: streamed deltas must assemble into ONE assistant block instead
-// of emitting a new header per token.
 func TestStreamingAssemblesSingleAssistantBlock(t *testing.T) {
 	m := Model{activeAssistant: -1, activeTool: -1}
 	m.handle(agent.Event{Kind: "text", Text: "Hello"})
@@ -225,8 +223,6 @@ func TestConnectOverlayOpensAndEscapes(t *testing.T) {
 	}
 }
 
-// Regression: /connect crashed because New() left connectInput uninitialized.
-// This exercises the real constructor end-to-end.
 func TestNewSupportsConnectOverlayWithoutPanic(t *testing.T) {
 	t.Setenv("USERPROFILE", t.TempDir()) // keep session store away from the real home
 	t.Setenv("HOME", t.TempDir())
@@ -612,9 +608,6 @@ func TestArrowKeysNavigateCommandPalette(t *testing.T) {
 	}
 }
 
-// Regression: the key entered in /connect used to live only in the runtime
-// APIKey field (json:"-"), so it vanished on the next launch and every chat
-// request died with an auth error.
 func TestFinishConnectPersistsKey(t *testing.T) {
 	isolatedUsageHome(t)
 	m := newTestModel(100, 40)
@@ -703,9 +696,6 @@ func TestStartupPullsRealModelsForLocalProvider(t *testing.T) {
 	}
 }
 
-// Regression: retriable provider failures (network/5xx/429) must be retried
-// with the backoff ladder until the turn succeeds; the prompt must not be
-// duplicated in history by the failed attempts.
 func TestTurnRetriesRetriableFailures(t *testing.T) {
 	isolatedUsageHome(t)
 	orig := turnBackoffs
@@ -773,11 +763,6 @@ func TestTurnDoesNotRetryAuthFailures(t *testing.T) {
 	}
 }
 
-// Regression: after the provider has actually produced output (the AI
-// "continues"), a later failure must restart the reconnect counter from
-// 1/10 instead of continuing from where it left off (e.g. 8/10). The
-// optimistic "thinking" activity that precedes every request does NOT count
-// as progress.
 func TestReconnectCounterRestartsAfterLiveProgress(t *testing.T) {
 	isolatedUsageHome(t)
 	orig := turnBackoffs

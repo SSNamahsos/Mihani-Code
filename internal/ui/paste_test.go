@@ -57,11 +57,6 @@ func TestDeliberateEnterStillSendsMultiline(t *testing.T) {
 	}
 }
 
-// Regression: the FIRST line of a raw paste arrived with an empty (single-
-// line) composer, where the old guard never fired — so a 5 KB prompt went
-// out as one auto-sent message per line. A machine-speed rune burst into a
-// single-line composer followed by Enter is a paste's line ending, not a
-// deliberate submit.
 func TestRawPasteFirstLineDoesNotSubmit(t *testing.T) {
 	m := newTestModel(80, 24)
 	m.input.SetValue("analyze this 5kb prompt i just pasted into the composer")
@@ -106,10 +101,6 @@ func TestRawPasteBlankLineKeepsGuardAlive(t *testing.T) {
 	}
 }
 
-// Regression: the burst counter was a lifetime total, so after ~40 characters
-// typed continuously, Enter inserted newlines instead of sending — and kept
-// doing so, because only runes refreshed the clock. The counter must measure
-// paste SPEED: a long human-typed line has to still send on the first Enter.
 func TestLongTypedLineStillSendsOnEnter(t *testing.T) {
 	m := newTestModel(80, 24)
 	// Simulate 120 characters typed at a brisk human pace: bursts of ~4 runes
@@ -180,10 +171,6 @@ func TestRawPasteShortLineAfterSubmitKeepsRiding(t *testing.T) {
 	}
 }
 
-// Regression (field log 2026-08-29): once the message menu opened, every
-// mouse event was dropped, so the user could no longer drag-select text
-// until pressing esc. A press outside the box must close the menu AND arm a
-// selection; a press on an item row selects that item.
 func TestOverlayClickOutsideClosesAndArmsSelection(t *testing.T) {
 	m := newTestModel(80, 50)
 	for i := 0; i < 20; i++ {

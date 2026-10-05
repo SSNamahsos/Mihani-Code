@@ -80,9 +80,6 @@ func TestMissingModelFailsFast(t *testing.T) {
 	}
 }
 
-// Regression: when the response hits the max output token limit (finish
-// "length") mid tool-call, the turn must continue in place with a
-// continuation nudge instead of dying with an unparseable-arguments error.
 func TestTruncatedReplyContinuesInTurn(t *testing.T) {
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
