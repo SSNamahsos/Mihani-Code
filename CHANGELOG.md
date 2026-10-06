@@ -2,6 +2,12 @@
 
 All notable changes to Mihani Code are documented here.
 
+## v0.4.6
+
+### Fixed
+- **Keystrokes reached the composer while a modal was open.** `/connect`, the API-key editor, `/update` and the approval and question prompts own the screen, but mouse and key events were falling through to the composer underneath, so typing into a dialog could leave stray edits in the prompt behind it. Modal events are now consumed by the modal.
+- **`/mouse` could leave the terminal in the wrong mouse-reporting mode.** The setting was applied only when a program handle happened to be set, so toggling mouse capture could silently do nothing, or leave the terminal still reporting in a mode that blocked native text selection. Both halves of the enable/disable sequence are now written together to the app's own output, so terminal text selection reliably comes back.
+
 ## v0.4.5
 
 ### Fixed
